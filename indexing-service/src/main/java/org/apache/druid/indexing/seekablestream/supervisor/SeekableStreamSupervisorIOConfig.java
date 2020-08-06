@@ -22,15 +22,20 @@ package org.apache.druid.indexing.seekablestream.supervisor;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
+import org.apache.druid.data.input.InputFormat;
 import org.apache.druid.java.util.common.IAE;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
 import org.joda.time.Period;
 
+import javax.annotation.Nullable;
+
 
 public abstract class SeekableStreamSupervisorIOConfig
 {
   private final String stream;
+  @Nullable
+  private final InputFormat inputFormat; // nullable for backward compatibility
   private final Integer replicas;
   private final Integer taskCount;
   private final Duration taskDuration;
@@ -44,6 +49,7 @@ public abstract class SeekableStreamSupervisorIOConfig
 
   public SeekableStreamSupervisorIOConfig(
       String stream,
+      @Nullable InputFormat inputFormat,
       Integer replicas,
       Integer taskCount,
       Period taskDuration,
@@ -57,6 +63,7 @@ public abstract class SeekableStreamSupervisorIOConfig
   )
   {
     this.stream = Preconditions.checkNotNull(stream, "stream cannot be null");
+    this.inputFormat = inputFormat;
     this.replicas = replicas != null ? replicas : 1;
     this.taskCount = taskCount != null ? taskCount : 1;
     this.taskDuration = defaultDuration(taskDuration, "PT1H");
@@ -91,6 +98,13 @@ public abstract class SeekableStreamSupervisorIOConfig
   public String getStream()
   {
     return stream;
+  }
+
+  @Nullable
+  @JsonProperty()
+  public InputFormat getInputFormat()
+  {
+    return inputFormat;
   }
 
   @JsonProperty

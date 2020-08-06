@@ -26,6 +26,7 @@ import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.mutable.MutableInt;
 import org.apache.druid.client.indexing.IndexingServiceClient;
 import org.apache.druid.client.indexing.TaskStatus;
+import org.apache.druid.common.utils.IdUtils;
 import org.apache.druid.guice.ManageLifecycle;
 import org.apache.druid.indexing.common.config.TaskConfig;
 import org.apache.druid.indexing.worker.config.WorkerConfig;
@@ -69,7 +70,7 @@ import java.util.stream.IntStream;
  * and phase 2 tasks read those files via HTTP.
  *
  * The directory where segment files are placed is structured as
- * {@link StorageLocation#path}/supervisorTaskId/startTimeOfSegment/endTimeOfSegment/partitionIdOfSegment.
+ * {@link StorageLocation#path}/supervisorTaskId/startTimeOfSegment/endTimeOfSegment/bucketIdOfSegment.
  *
  * This class provides interfaces to store, find, and remove segment files.
  * It also has a self-cleanup mechanism to clean up stale segment files. It periodically checks the last access time
@@ -205,11 +206,14 @@ public class IntermediaryDataManager
           );
         }
       }
-      LOG.info(
-          "Discovered partitions for [%s] new supervisor tasks under location[%s]",
-          numDiscovered.getValue(),
-          location.getPath()
-      );
+
+      if (numDiscovered.getValue() > 0) {
+        LOG.info(
+            "Discovered partitions for [%s] new supervisor tasks under location[%s]",
+            numDiscovered.getValue(),
+            location.getPath()
+        );
+      }
     }
   }
 
@@ -232,7 +236,9 @@ public class IntermediaryDataManager
       }
     }
 
-    LOG.info("Found [%s] expired supervisor tasks", expiredSupervisorTasks.size());
+    if (!expiredSupervisorTasks.isEmpty()) {
+      LOG.info("Found [%s] expired supervisor tasks", expiredSupervisorTasks.size());
+    }
 
     if (!expiredSupervisorTasks.isEmpty()) {
       final Map<String, TaskStatus> taskStatuses = indexingServiceClient.getTaskStatuses(expiredSupervisorTasks);
@@ -329,10 +335,11 @@ public class IntermediaryDataManager
   }
 
   @Nullable
-  public File findPartitionFile(String supervisorTaskId, String subTaskId, Interval interval, int partitionId)
+  public File findPartitionFile(String supervisorTaskId, String subTaskId, Interval interval, int bucketId)
   {
+    IdUtils.validateId("supervisorTaskId", supervisorTaskId);
     for (StorageLocation location : shuffleDataLocations) {
-      final File partitionDir = new File(location.getPath(), getPartitionDir(supervisorTaskId, interval, partitionId));
+      final File partitionDir = new File(location.getPath(), getPartitionDir(supervisorTaskId, interval, bucketId));
       if (partitionDir.exists()) {
         supervisorTaskCheckTimes.put(supervisorTaskId, getExpiryTimeFromNow());
         final File[] segmentFiles = partitionDir.listFiles();
@@ -359,6 +366,7 @@ public class IntermediaryDataManager
 
   public void deletePartitions(String supervisorTaskId) throws IOException
   {
+    IdUtils.validateId("supervisorTaskId", supervisorTaskId);
     for (StorageLocation location : shuffleDataLocations) {
       final File supervisorTaskPath = new File(location.getPath(), supervisorTaskId);
       if (supervisorTaskPath.exists()) {
@@ -376,23 +384,23 @@ public class IntermediaryDataManager
       String supervisorTaskId,
       String subTaskId,
       Interval interval,
-      int partitionId
+      int bucketId
   )
   {
-    return Paths.get(getPartitionDir(supervisorTaskId, interval, partitionId), subTaskId).toString();
+    return Paths.get(getPartitionDir(supervisorTaskId, interval, bucketId), subTaskId).toString();
   }
 
   private static String getPartitionDir(
       String supervisorTaskId,
       Interval interval,
-      int partitionId
+      int bucketId
   )
   {
     return Paths.get(
         supervisorTaskId,
         interval.getStart().toString(),
         interval.getEnd().toString(),
-        String.valueOf(partitionId)
+        String.valueOf(bucketId)
     ).toString();
   }
 }

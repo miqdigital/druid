@@ -21,11 +21,11 @@ import { IconNames } from '@blueprintjs/icons';
 import axios from 'axios';
 import React from 'react';
 
+import { SnitchDialog } from '..';
 import { AutoForm, ExternalLink } from '../../components';
+import { getLink } from '../../links';
 import { AppToaster } from '../../singletons/toaster';
 import { getDruidErrorMessage, QueryManager } from '../../utils';
-import { DRUID_DOCS_VERSION } from '../../variables';
-import { SnitchDialog } from '../snitch-dialog/snitch-dialog';
 
 import './coordinator-dynamic-config-dialog.scss';
 
@@ -127,9 +127,7 @@ export class CoordinatorDynamicConfigDialog extends React.PureComponent<
         <p>
           Edit the coordinator dynamic configuration on the fly. For more information please refer
           to the{' '}
-          <ExternalLink
-            href={`https://druid.apache.org/docs/${DRUID_DOCS_VERSION}/configuration/index.html#dynamic-configuration`}
-          >
+          <ExternalLink href={`${getLink('DOCS')}/configuration/index.html#dynamic-configuration`}>
             documentation
           </ExternalLink>
           .
@@ -180,6 +178,7 @@ export class CoordinatorDynamicConfigDialog extends React.PureComponent<
             {
               name: 'killDataSourceWhitelist',
               type: 'string-array',
+              emptyValue: [],
               info: (
                 <>
                   List of dataSources for which kill tasks are sent if property{' '}
@@ -191,6 +190,7 @@ export class CoordinatorDynamicConfigDialog extends React.PureComponent<
             {
               name: 'killPendingSegmentsSkipList',
               type: 'string-array',
+              emptyValue: [],
               info: (
                 <>
                   List of dataSources for which pendingSegments are NOT cleaned up if property{' '}
@@ -259,6 +259,7 @@ export class CoordinatorDynamicConfigDialog extends React.PureComponent<
             {
               name: 'decommissioningNodes',
               type: 'string-array',
+              emptyValue: [],
               info: (
                 <>
                   List of historical services to 'decommission'. Coordinator will not assign new

@@ -71,7 +71,6 @@ public class WhiteListBasedDruidToTimelineEventConverterTest
           "query/time, true",
           "query/node/ttfb, true",
           "query/segmentAndCache/time, true",
-          "query/intervalChunk/time, false",
           "query/time/balaba, true",
           "query/tim, false",
           "segment/added/bytes, true",
@@ -184,7 +183,7 @@ public class WhiteListBasedDruidToTimelineEventConverterTest
             defaultNamespace + ".data-source.ingest/persists/count"
         },
         new Object[]{
-            new ServiceMetricEvent.Builder().setDimension("bufferPoolName", "BufferPool")
+            new ServiceMetricEvent.Builder().setDimension("bufferpoolName", "BufferPool")
                                             .setDimension("type", "groupBy")
                                             .setDimension("some_random_dim1", "random_dim_value1")
                                             .build(createdTime, "jvm/bufferpool/capacity", 10)

@@ -24,8 +24,6 @@ import com.google.common.base.Supplier;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
-import com.google.common.io.Files;
-import org.apache.commons.io.FileUtils;
 import org.apache.druid.client.cache.CachePopulatorStats;
 import org.apache.druid.client.cache.MapCache;
 import org.apache.druid.data.input.Committer;
@@ -37,6 +35,7 @@ import org.apache.druid.data.input.impl.StringInputRowParser;
 import org.apache.druid.data.input.impl.TimestampSpec;
 import org.apache.druid.jackson.DefaultObjectMapper;
 import org.apache.druid.java.util.common.DateTimes;
+import org.apache.druid.java.util.common.FileUtils;
 import org.apache.druid.java.util.common.Intervals;
 import org.apache.druid.java.util.common.concurrent.Execs;
 import org.apache.druid.java.util.common.granularity.Granularities;
@@ -51,6 +50,7 @@ import org.apache.druid.segment.indexing.DataSchema;
 import org.apache.druid.segment.indexing.RealtimeTuningConfig;
 import org.apache.druid.segment.indexing.TuningConfigs;
 import org.apache.druid.segment.indexing.granularity.UniformGranularitySpec;
+import org.apache.druid.segment.join.NoopJoinableFactory;
 import org.apache.druid.segment.loading.DataSegmentPusher;
 import org.apache.druid.segment.realtime.FireDepartmentMetrics;
 import org.apache.druid.segment.realtime.FireDepartmentTest;
@@ -60,6 +60,7 @@ import org.apache.druid.segment.writeout.OffHeapMemorySegmentWriteOutMediumFacto
 import org.apache.druid.segment.writeout.SegmentWriteOutMediumFactory;
 import org.apache.druid.segment.writeout.TmpFileSegmentWriteOutMediumFactory;
 import org.apache.druid.server.coordination.DataSegmentAnnouncer;
+import org.apache.druid.testing.InitializedNullHandlingTest;
 import org.easymock.EasyMock;
 import org.joda.time.DateTime;
 import org.joda.time.Interval;
@@ -83,7 +84,7 @@ import java.util.concurrent.TimeUnit;
  *
  */
 @RunWith(Parameterized.class)
-public class RealtimePlumberSchoolTest
+public class RealtimePlumberSchoolTest extends InitializedNullHandlingTest
 {
   @Parameterized.Parameters(name = "rejectionPolicy = {0}, segmentWriteOutMediumFactory = {1}")
   public static Collection<?> constructorFeeder()
@@ -129,7 +130,7 @@ public class RealtimePlumberSchoolTest
   @Before
   public void setUp() throws Exception
   {
-    tmpDir = Files.createTempDir();
+    tmpDir = FileUtils.createTempDir();
 
     ObjectMapper jsonMapper = new DefaultObjectMapper();
 
@@ -140,6 +141,7 @@ public class RealtimePlumberSchoolTest
                 new JSONParseSpec(
                     new TimestampSpec("timestamp", "auto", null),
                     new DimensionsSpec(null, null, null),
+                    null,
                     null,
                     null
                 ),
@@ -160,6 +162,7 @@ public class RealtimePlumberSchoolTest
                 new JSONParseSpec(
                     new TimestampSpec("timestamp", "auto", null),
                     new DimensionsSpec(null, null, null),
+                    null,
                     null,
                     null
                 ),
@@ -226,6 +229,7 @@ public class RealtimePlumberSchoolTest
         segmentPublisher,
         handoffNotifierFactory,
         Execs.directExecutor(),
+        NoopJoinableFactory.INSTANCE,
         TestHelper.getTestIndexMergerV9(segmentWriteOutMediumFactory),
         TestHelper.getTestIndexIO(),
         MapCache.create(0),

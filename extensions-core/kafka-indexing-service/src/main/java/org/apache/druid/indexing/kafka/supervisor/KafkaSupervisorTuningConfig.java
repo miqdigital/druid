@@ -34,14 +34,42 @@ import java.io.File;
 public class KafkaSupervisorTuningConfig extends KafkaIndexTaskTuningConfig
     implements SeekableStreamSupervisorTuningConfig
 {
-  private static final String DEFAULT_OFFSET_FETCH_PERIOD = "PT30S";
-
   private final Integer workerThreads;
   private final Integer chatThreads;
   private final Long chatRetries;
   private final Duration httpTimeout;
   private final Duration shutdownTimeout;
   private final Duration offsetFetchPeriod;
+
+  public static KafkaSupervisorTuningConfig defaultConfig()
+  {
+    return new KafkaSupervisorTuningConfig(
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+    );
+  }
 
   public KafkaSupervisorTuningConfig(
       @JsonProperty("maxRowsInMemory") Integer maxRowsInMemory,
@@ -151,6 +179,7 @@ public class KafkaSupervisorTuningConfig extends KafkaIndexTaskTuningConfig
     );
   }
 
+  @Override
   @JsonProperty
   public Duration getOffsetFetchPeriod()
   {

@@ -188,8 +188,8 @@ public class IndexTaskSerdeTest
   @Test
   public void testForceGuaranteedRollupWithDynamicPartitionsSpec()
   {
-    expectedException.expect(IllegalStateException.class);
-    expectedException.expectMessage("HashedPartitionsSpec must be used for perfect rollup");
+    expectedException.expect(IllegalArgumentException.class);
+    expectedException.expectMessage("DynamicPartitionsSpec cannot be used for perfect rollup");
     final IndexTuningConfig tuningConfig = new IndexTuningConfig(
         null,
         null,
@@ -222,7 +222,7 @@ public class IndexTaskSerdeTest
   @Test
   public void testBestEffortRollupWithHashedPartitionsSpec()
   {
-    expectedException.expect(IllegalStateException.class);
+    expectedException.expect(IllegalArgumentException.class);
     expectedException.expectMessage("DynamicPartitionsSpec must be used for best-effort rollup");
     final IndexTuningConfig tuningConfig = new IndexTuningConfig(
         null,

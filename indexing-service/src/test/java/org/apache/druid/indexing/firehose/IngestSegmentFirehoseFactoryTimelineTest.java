@@ -24,8 +24,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
-import com.google.common.io.Files;
-import org.apache.commons.io.FileUtils;
 import org.apache.druid.client.coordinator.CoordinatorClient;
 import org.apache.druid.data.input.FiniteFirehoseFactory;
 import org.apache.druid.data.input.Firehose;
@@ -42,6 +40,7 @@ import org.apache.druid.indexing.common.RetryPolicyFactory;
 import org.apache.druid.indexing.common.SegmentLoaderFactory;
 import org.apache.druid.indexing.common.TestUtils;
 import org.apache.druid.java.util.common.DateTimes;
+import org.apache.druid.java.util.common.FileUtils;
 import org.apache.druid.java.util.common.Intervals;
 import org.apache.druid.java.util.common.JodaUtils;
 import org.apache.druid.query.aggregation.LongSumAggregatorFactory;
@@ -95,6 +94,7 @@ public class IngestSegmentFirehoseFactoryTimelineTest
                   null,
                   null
               ),
+              null,
               null,
               null
           )
@@ -204,7 +204,7 @@ public class IngestSegmentFirehoseFactoryTimelineTest
       DataSegmentMaker... segmentMakers
   )
   {
-    final File tmpDir = Files.createTempDir();
+    final File tmpDir = FileUtils.createTempDir();
     final Set<DataSegment> segments = new HashSet<>();
     for (DataSegmentMaker segmentMaker : segmentMakers) {
       segments.add(segmentMaker.make(tmpDir));
@@ -322,7 +322,10 @@ public class IngestSegmentFirehoseFactoryTimelineTest
       final CoordinatorClient cc = new CoordinatorClient(null, null)
       {
         @Override
-        public Collection<DataSegment> getDatabaseSegmentDataSourceSegments(String dataSource, List<Interval> intervals)
+        public Collection<DataSegment> fetchUsedSegmentsInDataSourceForIntervals(
+            String dataSource,
+            List<Interval> intervals
+        )
         {
           // Expect the interval we asked for
           if (intervals.equals(ImmutableList.of(testCase.interval))) {
@@ -333,7 +336,7 @@ public class IngestSegmentFirehoseFactoryTimelineTest
         }
 
         @Override
-        public DataSegment getDatabaseSegmentDataSourceSegment(String dataSource, String segmentId)
+        public DataSegment fetchUsedSegment(String dataSource, String segmentId)
         {
           return testCase.segments
               .stream()
@@ -346,7 +349,7 @@ public class IngestSegmentFirehoseFactoryTimelineTest
           DATA_SOURCE,
           testCase.interval,
           null,
-          new TrueDimFilter(),
+          TrueDimFilter.instance(),
           Arrays.asList(DIMENSIONS),
           Arrays.asList(METRICS),
           // Split as much as possible

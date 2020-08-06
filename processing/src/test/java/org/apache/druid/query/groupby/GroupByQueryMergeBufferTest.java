@@ -31,7 +31,6 @@ import org.apache.druid.collections.ReferenceCountingResourceHolder;
 import org.apache.druid.java.util.common.concurrent.Execs;
 import org.apache.druid.java.util.common.granularity.Granularities;
 import org.apache.druid.query.DruidProcessingConfig;
-import org.apache.druid.query.QueryConfig;
 import org.apache.druid.query.QueryContexts;
 import org.apache.druid.query.QueryDataSource;
 import org.apache.druid.query.QueryRunner;
@@ -41,6 +40,7 @@ import org.apache.druid.query.dimension.DefaultDimensionSpec;
 import org.apache.druid.query.groupby.strategy.GroupByStrategySelector;
 import org.apache.druid.query.groupby.strategy.GroupByStrategyV1;
 import org.apache.druid.query.groupby.strategy.GroupByStrategyV2;
+import org.apache.druid.testing.InitializedNullHandlingTest;
 import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.Before;
@@ -56,7 +56,7 @@ import java.util.Collections;
 import java.util.List;
 
 @RunWith(Parameterized.class)
-public class GroupByQueryMergeBufferTest
+public class GroupByQueryMergeBufferTest extends InitializedNullHandlingTest
 {
   private static final long TIMEOUT = 5000;
 
@@ -68,17 +68,6 @@ public class GroupByQueryMergeBufferTest
     {
       super(generator, limit);
       minRemainBufferNum = limit;
-    }
-
-    @Override
-    public ReferenceCountingResourceHolder<ByteBuffer> take(final long timeout)
-    {
-      final ReferenceCountingResourceHolder<ByteBuffer> holder = super.take(timeout);
-      final int poolSize = getPoolSize();
-      if (minRemainBufferNum > poolSize) {
-        minRemainBufferNum = poolSize;
-      }
-      return holder;
     }
 
     @Override
@@ -148,17 +137,13 @@ public class GroupByQueryMergeBufferTest
         new GroupByStrategyV2(
             PROCESSING_CONFIG,
             configSupplier,
-            Suppliers.ofInstance(new QueryConfig()),
             BUFFER_POOL,
             MERGE_BUFFER_POOL,
             mapper,
             QueryRunnerTestHelper.NOOP_QUERYWATCHER
         )
     );
-    final GroupByQueryQueryToolChest toolChest = new GroupByQueryQueryToolChest(
-        strategySelector,
-        QueryRunnerTestHelper.noopIntervalChunkingQueryRunnerDecorator()
-    );
+    final GroupByQueryQueryToolChest toolChest = new GroupByQueryQueryToolChest(strategySelector);
     return new GroupByQueryRunnerFactory(strategySelector, toolChest);
   }
 

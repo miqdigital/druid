@@ -45,9 +45,29 @@ An endpoint that always returns a boolean "true" value with a 200 OK response, u
 
 Returns the current configuration properties of the process.
 
+* `/status/selfDiscovered/status`
+
+Returns a JSON map of the form `{"selfDiscovered": true/false}`, indicating whether the node has received a confirmation
+from the central node discovery mechanism (currently ZooKeeper) of the Druid cluster that the node has been added to the
+cluster. It is recommended to not consider a Druid node "healthy" or "ready" in automated deployment/container
+management systems until it returns `{"selfDiscovered": true}` from this endpoint. This is because a node may be
+isolated from the rest of the cluster due to network issues and it doesn't make sense to consider nodes "healthy" in
+this case. Also, when nodes such as Brokers use ZooKeeper segment discovery for building their view of the Druid cluster
+(as opposed to HTTP segment discovery), they may be unusable until the ZooKeeper client is fully initialized and starts
+to receive data from the ZooKeeper cluster. `{"selfDiscovered": true}` is a proxy event indicating that the ZooKeeper
+client on the node has started to receive data from the ZooKeeper cluster and it's expected that all segments and other
+nodes will be discovered by this node timely from this point.
+
+* `/status/selfDiscovered`
+
+Similar to `/status/selfDiscovered/status`, but returns 200 OK response with empty body if the node has discovered itself
+and 503 SERVICE UNAVAILABLE if the node hasn't discovered itself yet. This endpoint might be useful because some
+monitoring checks such as AWS load balancer health checks are not able to look at the response body.
+
 ## Master Server
 
-This section documents the API endpoints for the processes that reside on Master servers (Coordinators and Overlords) in the suggested [three-server configuration](../design/processes.html#server-types).
+This section documents the API endpoints for the processes that reside on Master servers (Coordinators and Overlords)
+in the suggested [three-server configuration](../design/processes.html#server-types).
 
 ### Coordinator
 
@@ -76,11 +96,11 @@ Returns the percentage of segments actually loaded in the cluster versus segment
 
  * `/druid/coordinator/v1/loadstatus?simple`
 
-Returns the number of segments left to load until segments that should be loaded in the cluster are available for queries. This does not include replication.
+Returns the number of segments left to load until segments that should be loaded in the cluster are available for queries. This does not include segment replication counts.
 
 * `/druid/coordinator/v1/loadstatus?full`
 
-Returns the number of segments left to load in each tier until segments that should be loaded in the cluster are all available. This includes replication.
+Returns the number of segments left to load in each tier until segments that should be loaded in the cluster are all available. This includes segment replication counts.
 
 * `/druid/coordinator/v1/loadqueue`
 
@@ -93,6 +113,45 @@ Returns the number of segments to load and drop, as well as the total segment lo
 * `/druid/coordinator/v1/loadqueue?full`
 
 Returns the serialized JSON of segments to load and drop for each Historical process.
+
+
+#### Segment Loading by Datasource
+
+Note that all _interval_ query parameters are ISO 8601 strings (e.g., 2016-06-27/2016-06-28).
+Also note that these APIs only guarantees that the segments are available at the time of the call. 
+Segments can still become missing because of historical process failures or any other reasons afterward.
+
+##### GET
+
+* `/druid/coordinator/v1/datasources/{dataSourceName}/loadstatus?forceMetadataRefresh={boolean}&interval={myInterval}`
+
+Returns the percentage of segments actually loaded in the cluster versus segments that should be loaded in the cluster for the given 
+datasource over the given interval (or last 2 weeks if interval is not given). `forceMetadataRefresh` is required to be set. 
+Setting `forceMetadataRefresh` to true will force the coordinator to poll latest segment metadata from the metadata store 
+(Note: `forceMetadataRefresh=true` refreshes Coordinator's metadata cache of all datasources. This can be a heavy operation in terms 
+of the load on the metadata store but can be necessary to make sure that we verify all the latest segments' load status)
+Setting `forceMetadataRefresh` to false will use the metadata cached on the coordinator from the last force/periodic refresh. 
+If no used segments are found for the given inputs, this API returns `204 No Content`
+
+ * `/druid/coordinator/v1/datasources/{dataSourceName}/loadstatus?simple&forceMetadataRefresh={boolean}&interval={myInterval}`
+
+Returns the number of segments left to load until segments that should be loaded in the cluster are available for the given datasource 
+over the given interval (or last 2 weeks if interval is not given). This does not include segment replication counts. `forceMetadataRefresh` is required to be set. 
+Setting `forceMetadataRefresh` to true will force the coordinator to poll latest segment metadata from the metadata store 
+(Note: `forceMetadataRefresh=true` refreshes Coordinator's metadata cache of all datasources. This can be a heavy operation in terms 
+of the load on the metadata store but can be necessary to make sure that we verify all the latest segments' load status)
+Setting `forceMetadataRefresh` to false will use the metadata cached on the coordinator from the last force/periodic refresh. 
+If no used segments are found for the given inputs, this API returns `204 No Content` 
+
+* `/druid/coordinator/v1/datasources/{dataSourceName}/loadstatus?full&forceMetadataRefresh={boolean}&interval={myInterval}`
+
+Returns the number of segments left to load in each tier until segments that should be loaded in the cluster are all available for the given datasource 
+over the given interval (or last 2 weeks if interval is not given). This includes segment replication counts. `forceMetadataRefresh` is required to be set. 
+Setting `forceMetadataRefresh` to true will force the coordinator to poll latest segment metadata from the metadata store 
+(Note: `forceMetadataRefresh=true` refreshes Coordinator's metadata cache of all datasources. This can be a heavy operation in terms 
+of the load on the metadata store but can be necessary to make sure that we verify all the latest segments' load status)
+Setting `forceMetadataRefresh` to false will use the metadata cached on the coordinator from the last force/periodic refresh. 
+If no used segments are found for the given inputs, this API returns `204 No Content`
 
 #### Metadata store information
 
@@ -126,7 +185,8 @@ Returns a list of all segments for a datasource with the full segment metadata a
 
 * `/druid/coordinator/v1/metadata/datasources/{dataSourceName}/segments/{segmentId}`
 
-Returns full segment metadata for a specific segment as stored in the metadata store.
+Returns full segment metadata for a specific segment as stored in the metadata store, if the segment is used. If the
+segment is unused, or is unknown, a 404 response is returned.
 
 ##### POST
 
@@ -340,6 +400,15 @@ Returns total size and count for each interval within given isointerval.
 * `/druid/coordinator/v1/intervals/{interval}?full`
 
 Returns total size and count for each datasource for each interval within given isointerval.
+
+#### Compaction Status
+
+##### GET
+
+* `/druid/coordinator/v1/compaction/progress?dataSource={dataSource}`
+
+Returns the total size of segments awaiting compaction for the given dataSource. 
+This is only valid for dataSource which has compaction enabled. 
 
 #### Compaction Configuration
 
@@ -752,7 +821,11 @@ Returns segment information lists including server locations for the given datas
 
 * `/druid/broker/v1/loadstatus`
 
-Returns a flag indicating if the Broker knows about all segments in Zookeeper. This can be used to know when a Broker process is ready to be queried after a restart.
+Returns a flag indicating if the Broker knows about all segments in the cluster. This can be used to know when a Broker process is ready to be queried after a restart.
+
+* `/druid/broker/v1/readiness`
+
+Similar to `/druid/broker/v1/loadstatus`, but instead of returning a JSON, responses 200 OK if its ready and otherwise 503 SERVICE UNAVAILABLE.
 
 #### Queries
 

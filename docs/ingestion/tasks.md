@@ -164,7 +164,7 @@ Only batch tasks have the DETERMINE_PARTITIONS phase. Realtime tasks such as tho
 the `rowStats` map contains information about row counts. There is one entry for each ingestion phase. The definitions of the different row counts are shown below:
 * `processed`: Number of rows successfully ingested without parsing errors
 * `processedWithError`: Number of rows that were ingested, but contained a parsing error within one or more columns. This typically occurs where input rows have a parseable structure but invalid types for columns, such as passing in a non-numeric String value for a numeric column.
-* `thrownAway`: Number of rows skipped. This includes rows with timestamps that were outside of the ingestion task's defined time interval and rows that were filtered out with a [`transformSpec`](index.md#transformspec).
+* `thrownAway`: Number of rows skipped. This includes rows with timestamps that were outside of the ingestion task's defined time interval and rows that were filtered out with a [`transformSpec`](index.md#transformspec), but doesn't include the rows skipped by explicit user configurations. For example, the rows skipped by `skipHeaderRows` or `hasHeaderRow` in the CSV format are not counted.
 * `unparseable`: Number of rows that could not be parsed at all and were discarded. This tracks input rows without a parseable structure, such as passing in non-JSON data when using a JSON parser.
 
 The `errorMsg` field shows a message describing the error that caused a task to fail. It will be null if the task was successful.
@@ -395,59 +395,3 @@ Compaction tasks merge all segments of the given interval. See the documentation
 
 Kill tasks delete all metadata about certain segments and removes them from deep storage.
 See the documentation on [deleting data](../ingestion/data-management.md#delete) for details.
-
-### `append`
-
-Append tasks append a list of segments together into a single segment (one after the other). The grammar is:
-
-```json
-{
-    "type": "append",
-    "id": <task_id>,
-    "dataSource": <task_datasource>,
-    "segments": <JSON list of DataSegment objects to append>,
-    "aggregations": <optional list of aggregators>,
-    "context": <task context>
-}
-```
-
-### `merge`
-
-Merge tasks merge a list of segments together. Any common timestamps are merged.
-If rollup is disabled as part of ingestion, common timestamps are not merged and rows are reordered by their timestamp.
-
-> The [`compact`](#compact) task is often a better choice than the `merge` task.
-
-The grammar is:
-
-```json
-{
-    "type": "merge",
-    "id": <task_id>,
-    "dataSource": <task_datasource>,
-    "aggregations": <list of aggregators>,
-    "rollup": <whether or not to rollup data during a merge>,
-    "segments": <JSON list of DataSegment objects to merge>,
-    "context": <task context>
-}
-```
-
-### `same_interval_merge`
-
-Same Interval Merge task is a shortcut of merge task, all segments in the interval are going to be merged.
-
-> The [`compact`](#compact) task is often a better choice than the `same_interval_merge` task.
-
-The grammar is:
-
-```json
-{
-    "type": "same_interval_merge",
-    "id": <task_id>,
-    "dataSource": <task_datasource>,
-    "aggregations": <list of aggregators>,
-    "rollup": <whether or not to rollup data during a merge>,
-    "interval": <DataSegment objects in this interval are going to be merged>,
-    "context": <task context>
-}
-```

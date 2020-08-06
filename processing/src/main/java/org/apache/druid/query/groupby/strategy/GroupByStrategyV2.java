@@ -41,9 +41,7 @@ import org.apache.druid.java.util.common.guava.Sequences;
 import org.apache.druid.query.DataSource;
 import org.apache.druid.query.DruidProcessingConfig;
 import org.apache.druid.query.InsufficientResourcesException;
-import org.apache.druid.query.IntervalChunkingQueryRunnerDecorator;
 import org.apache.druid.query.Query;
-import org.apache.druid.query.QueryConfig;
 import org.apache.druid.query.QueryContexts;
 import org.apache.druid.query.QueryDataSource;
 import org.apache.druid.query.QueryPlus;
@@ -58,17 +56,18 @@ import org.apache.druid.query.dimension.DefaultDimensionSpec;
 import org.apache.druid.query.dimension.DimensionSpec;
 import org.apache.druid.query.groupby.GroupByQuery;
 import org.apache.druid.query.groupby.GroupByQueryConfig;
-import org.apache.druid.query.groupby.GroupByQueryQueryToolChest;
 import org.apache.druid.query.groupby.ResultRow;
 import org.apache.druid.query.groupby.epinephelinae.GroupByBinaryFnV2;
 import org.apache.druid.query.groupby.epinephelinae.GroupByMergingQueryRunnerV2;
 import org.apache.druid.query.groupby.epinephelinae.GroupByQueryEngineV2;
 import org.apache.druid.query.groupby.epinephelinae.GroupByRowProcessor;
+import org.apache.druid.query.groupby.orderby.DefaultLimitSpec;
 import org.apache.druid.query.groupby.orderby.LimitSpec;
 import org.apache.druid.query.groupby.orderby.NoopLimitSpec;
 import org.apache.druid.query.groupby.resource.GroupByQueryResource;
 import org.apache.druid.query.spec.MultipleIntervalSegmentSpec;
 import org.apache.druid.segment.StorageAdapter;
+import org.apache.druid.segment.VirtualColumns;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -90,7 +89,6 @@ public class GroupByStrategyV2 implements GroupByStrategy
 
   private final DruidProcessingConfig processingConfig;
   private final Supplier<GroupByQueryConfig> configSupplier;
-  private final Supplier<QueryConfig> queryConfigSupplier;
   private final NonBlockingPool<ByteBuffer> bufferPool;
   private final BlockingPool<ByteBuffer> mergeBufferPool;
   private final ObjectMapper spillMapper;
@@ -100,7 +98,6 @@ public class GroupByStrategyV2 implements GroupByStrategy
   public GroupByStrategyV2(
       DruidProcessingConfig processingConfig,
       Supplier<GroupByQueryConfig> configSupplier,
-      Supplier<QueryConfig> queryConfigSupplier,
       @Global NonBlockingPool<ByteBuffer> bufferPool,
       @Merging BlockingPool<ByteBuffer> mergeBufferPool,
       @Smile ObjectMapper spillMapper,
@@ -109,7 +106,6 @@ public class GroupByStrategyV2 implements GroupByStrategy
   {
     this.processingConfig = processingConfig;
     this.configSupplier = configSupplier;
-    this.queryConfigSupplier = queryConfigSupplier;
     this.bufferPool = bufferPool;
     this.mergeBufferPool = mergeBufferPool;
     this.spillMapper = spillMapper;
@@ -174,21 +170,6 @@ public class GroupByStrategyV2 implements GroupByStrategy
   }
 
   @Override
-  public QueryRunner<ResultRow> createIntervalChunkingRunner(
-      final IntervalChunkingQueryRunnerDecorator decorator,
-      final QueryRunner<ResultRow> runner,
-      final GroupByQueryQueryToolChest toolChest
-  )
-  {
-    // No chunkPeriod-based interval chunking for groupBy v2.
-    //  1) It concats query chunks for consecutive intervals, which won't generate correct results.
-    //  2) Merging instead of concating isn't a good idea, since it requires all chunks to run simultaneously,
-    //     which may take more resources than the cluster has.
-    // See also https://github.com/apache/incubator-druid/pull/4004
-    return runner;
-  }
-
-  @Override
   public Comparator<ResultRow> createResultComparator(Query<ResultRow> queryParam)
   {
     return ((GroupByQuery) queryParam).getRowOrdering(true);
@@ -241,7 +222,11 @@ public class GroupByStrategyV2 implements GroupByStrategy
         query.getPostAggregatorSpecs(),
         // Don't do "having" clause until the end of this method.
         null,
-        query.getLimitSpec(),
+        // Potentially pass limit down the stack (i.e. limit pushdown). Notes:
+        //   (1) Limit pushdown is only supported for DefaultLimitSpec.
+        //   (2) When pushing down a limit, it must be extended to include the offset (the offset will be applied
+        //       higher-up).
+        query.isApplyLimitPushDown() ? ((DefaultLimitSpec) query.getLimitSpec()).withOffsetToLimit() : null,
         query.getSubtotalsSpec(),
         query.getContext()
     ).withOverriddenContext(
@@ -372,7 +357,11 @@ public class GroupByStrategyV2 implements GroupByStrategy
     GroupByRowProcessor.ResultSupplier resultSupplierOne = null;
 
     try {
-      GroupByQuery queryWithoutSubtotalsSpec = query
+      // baseSubtotalQuery is the original query with dimensions and aggregators rewritten to apply to the *results*
+      // rather than *inputs* of that query. It has its virtual columns and dim filter removed, because those only
+      // make sense when applied to inputs. Finally, it has subtotalsSpec removed, since we'll be computing them
+      // one-by-one soon enough.
+      GroupByQuery baseSubtotalQuery = query
           .withDimensionSpecs(query.getDimensions().stream().map(
               dimSpec -> new DefaultDimensionSpec(
                   dimSpec.getOutputName(),
@@ -386,13 +375,13 @@ public class GroupByStrategyV2 implements GroupByStrategy
                    .map(AggregatorFactory::getCombiningFactory)
                    .collect(Collectors.toList())
           )
-          .withSubtotalsSpec(null)
-          .withDimFilter(null);
-
+          .withVirtualColumns(VirtualColumns.EMPTY)
+          .withDimFilter(null)
+          .withSubtotalsSpec(null);
 
       resultSupplierOne = GroupByRowProcessor.process(
-          queryWithoutSubtotalsSpec,
-          queryWithoutSubtotalsSpec,
+          baseSubtotalQuery,
+          baseSubtotalQuery,
           queryResult,
           configSupplier.get(),
           resource,
@@ -401,13 +390,13 @@ public class GroupByStrategyV2 implements GroupByStrategy
           processingConfig.intermediateComputeSizeBytes()
       );
 
-      List<String> queryDimNames = queryWithoutSubtotalsSpec.getDimensions().stream().map(DimensionSpec::getOutputName)
-                                                            .collect(Collectors.toList());
+      List<String> queryDimNames = baseSubtotalQuery.getDimensions().stream().map(DimensionSpec::getOutputName)
+                                                    .collect(Collectors.toList());
 
       // Only needed to make LimitSpec.filterColumns(..) call later in case base query has a non default LimitSpec.
       Set<String> aggsAndPostAggs = null;
-      if (queryWithoutSubtotalsSpec.getLimitSpec() != null && !(queryWithoutSubtotalsSpec.getLimitSpec() instanceof NoopLimitSpec)) {
-        aggsAndPostAggs = getAggregatorAndPostAggregatorNames(queryWithoutSubtotalsSpec);
+      if (!(baseSubtotalQuery.getLimitSpec() instanceof NoopLimitSpec)) {
+        aggsAndPostAggs = getAggregatorAndPostAggregatorNames(baseSubtotalQuery);
       }
 
       List<List<String>> subtotals = query.getSubtotalsSpec();
@@ -433,7 +422,7 @@ public class GroupByStrategyV2 implements GroupByStrategy
             // Insert dummy dimension so all subtotals queries have ResultRows with the same shape.
             // Use a field name that does not appear in the main query result, to assure the result will be null.
             String dimName = "_" + i;
-            while (query.getResultRowPositionLookup().getInt(dimName) >= 0) {
+            while (query.getResultRowSignature().indexOf(dimName) >= 0) {
               dimName = "_" + dimName;
             }
             newDimensions.add(DefaultDimensionSpec.of(dimName));
@@ -442,14 +431,14 @@ public class GroupByStrategyV2 implements GroupByStrategy
 
         // Create appropriate LimitSpec for subtotal query
         LimitSpec subtotalQueryLimitSpec = NoopLimitSpec.instance();
-        if (queryWithoutSubtotalsSpec.getLimitSpec() != null && !(queryWithoutSubtotalsSpec.getLimitSpec() instanceof NoopLimitSpec)) {
-          Set<String> columns = new HashSet(aggsAndPostAggs);
+        if (!(baseSubtotalQuery.getLimitSpec() instanceof NoopLimitSpec)) {
+          Set<String> columns = new HashSet<>(aggsAndPostAggs);
           columns.addAll(subtotalSpec);
 
-          subtotalQueryLimitSpec = queryWithoutSubtotalsSpec.getLimitSpec().filterColumns(columns);
+          subtotalQueryLimitSpec = baseSubtotalQuery.getLimitSpec().filterColumns(columns);
         }
 
-        GroupByQuery subtotalQuery = queryWithoutSubtotalsSpec
+        GroupByQuery subtotalQuery = baseSubtotalQuery
             .withLimitSpec(subtotalQueryLimitSpec)
             .withDimensionSpecs(newDimensions);
 
@@ -468,7 +457,7 @@ public class GroupByStrategyV2 implements GroupByStrategy
           // Also note, we can't create the ResultSupplier eagerly here or as we don't want to eagerly allocate
           // merge buffers for processing subtotal.
           Supplier<GroupByRowProcessor.ResultSupplier> resultSupplierTwo = () -> GroupByRowProcessor.process(
-              queryWithoutSubtotalsSpec,
+              baseSubtotalQuery,
               subtotalQuery,
               resultSupplierOneFinal.results(subtotalSpec),
               configSupplier.get(),
@@ -485,7 +474,7 @@ public class GroupByStrategyV2 implements GroupByStrategy
       }
 
       return Sequences.withBaggage(
-          Sequences.concat(subtotalsResults),
+          query.postProcess(Sequences.concat(subtotalsResults)),
           resultSupplierOne //this will close resources allocated by resultSupplierOne after sequence read
       );
     }
@@ -506,21 +495,17 @@ public class GroupByStrategyV2 implements GroupByStrategy
     // on sequence read if closeOnSequenceRead is true.
     try {
       Supplier<GroupByRowProcessor.ResultSupplier> memoizedSupplier = Suppliers.memoize(baseResultsSupplier);
-      return applyPostProcessing(
-          mergeResults(
-              (queryPlus, responseContext) ->
-                  new LazySequence<>(
-                      () -> Sequences.withBaggage(
-                          memoizedSupplier.get().results(dimsToInclude),
-                          closeOnSequenceRead ? () -> CloseQuietly.close(memoizedSupplier.get()) : () -> {}
-                      )
-                  ),
-              subtotalQuery,
-              null
-          ),
-          subtotalQuery
+      return mergeResults(
+          (queryPlus, responseContext) ->
+              new LazySequence<>(
+                  () -> Sequences.withBaggage(
+                      memoizedSupplier.get().results(dimsToInclude),
+                      closeOnSequenceRead ? () -> CloseQuietly.close(memoizedSupplier.get()) : () -> {}
+                  )
+              ),
+          subtotalQuery,
+          null
       );
-
     }
     catch (Exception ex) {
       CloseQuietly.close(baseResultsSupplier.get());
@@ -590,8 +575,7 @@ public class GroupByStrategyV2 implements GroupByStrategy
         query,
         storageAdapter,
         bufferPool,
-        configSupplier.get().withOverrides(query),
-        queryConfigSupplier.get().withOverrides(query)
+        configSupplier.get().withOverrides(query)
     );
   }
 

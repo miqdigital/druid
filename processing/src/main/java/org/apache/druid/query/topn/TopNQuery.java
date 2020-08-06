@@ -114,6 +114,7 @@ public class TopNQuery extends BaseQuery<Result<TopNResultValue>>
   }
 
   @JsonProperty
+  @Override
   public VirtualColumns getVirtualColumns()
   {
     return virtualColumns;
@@ -200,11 +201,6 @@ public class TopNQuery extends BaseQuery<Result<TopNResultValue>>
   public TopNQuery withOverriddenContext(Map<String, Object> contextOverrides)
   {
     return new TopNQueryBuilder(this).context(computeOverriddenContext(getContext(), contextOverrides)).build();
-  }
-
-  public TopNQuery withDimFilter(DimFilter dimFilter)
-  {
-    return new TopNQueryBuilder(this).filters(dimFilter).build();
   }
 
   @Override

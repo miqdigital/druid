@@ -19,9 +19,9 @@
 
 package org.apache.druid.query.aggregation.datasketches.theta;
 
-import com.yahoo.sketches.Family;
-import com.yahoo.sketches.theta.SetOperation;
-import com.yahoo.sketches.theta.Union;
+import org.apache.datasketches.Family;
+import org.apache.datasketches.theta.SetOperation;
+import org.apache.datasketches.theta.Union;
 import org.apache.druid.java.util.common.ISE;
 import org.apache.druid.query.aggregation.Aggregator;
 import org.apache.druid.segment.BaseObjectColumnValueSelector;
@@ -122,7 +122,9 @@ public class SketchAggregator implements Aggregator
       union.update((long[]) update);
     } else if (update instanceof List) {
       for (Object entry : (List) update) {
-        union.update(entry.toString());
+        if (entry != null) {
+          union.update(entry.toString());
+        }
       }
     } else {
       throw new ISE("Illegal type received while theta sketch merging [%s]", update.getClass());

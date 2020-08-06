@@ -162,7 +162,7 @@ public class BatchDeltaIngestionTest
   /**
    * By default re-indexing expects same aggregators as used by original indexing job. But, with additional flag
    * "useNewAggs" in DatasourcePathSpec, user can optionally have any set of aggregators.
-   * See https://github.com/apache/incubator-druid/issues/5277 .
+   * See https://github.com/apache/druid/issues/5277 .
    */
   @Test
   public void testReindexingWithNewAggregators() throws Exception
@@ -489,7 +489,7 @@ public class BatchDeltaIngestionTest
             INTERVAL_FULL.getStartMillis(),
             ImmutableList.of(
                 new HadoopyShardSpec(
-                    new HashBasedNumberedShardSpec(0, 1, null, HadoopDruidIndexerConfig.JSON_MAPPER),
+                    new HashBasedNumberedShardSpec(0, 1, 0, 1, null, HadoopDruidIndexerConfig.JSON_MAPPER),
                     0
                 )
             )

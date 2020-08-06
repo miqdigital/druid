@@ -31,6 +31,8 @@ import org.apache.druid.java.util.common.guava.SequenceWrapper;
 import org.apache.druid.java.util.common.guava.Sequences;
 import org.apache.druid.java.util.common.logger.Logger;
 import org.apache.druid.java.util.emitter.service.ServiceEmitter;
+import org.apache.druid.query.BaseQuery;
+import org.apache.druid.query.DefaultQueryConfig;
 import org.apache.druid.query.DruidMetrics;
 import org.apache.druid.query.GenericQueryMetricsFactory;
 import org.apache.druid.query.Query;
@@ -77,6 +79,7 @@ public class QueryLifecycle
   private final ServiceEmitter emitter;
   private final RequestLogger requestLogger;
   private final AuthorizerMapper authorizerMapper;
+  private final DefaultQueryConfig defaultQueryConfig;
   private final long startMs;
   private final long startNs;
 
@@ -92,6 +95,7 @@ public class QueryLifecycle
       final ServiceEmitter emitter,
       final RequestLogger requestLogger,
       final AuthorizerMapper authorizerMapper,
+      final DefaultQueryConfig defaultQueryConfig,
       final long startMs,
       final long startNs
   )
@@ -102,6 +106,7 @@ public class QueryLifecycle
     this.emitter = emitter;
     this.requestLogger = requestLogger;
     this.authorizerMapper = authorizerMapper;
+    this.defaultQueryConfig = defaultQueryConfig;
     this.startMs = startMs;
     this.startNs = startNs;
   }
@@ -170,7 +175,14 @@ public class QueryLifecycle
       queryId = UUID.randomUUID().toString();
     }
 
-    this.baseQuery = baseQuery.withId(queryId);
+    Map<String, Object> mergedUserAndConfigContext;
+    if (baseQuery.getContext() != null) {
+      mergedUserAndConfigContext = BaseQuery.computeOverriddenContext(defaultQueryConfig.getContext(), baseQuery.getContext());
+    } else {
+      mergedUserAndConfigContext = defaultQueryConfig.getContext();
+    }
+
+    this.baseQuery = baseQuery.withOverriddenContext(mergedUserAndConfigContext).withId(queryId);
     this.toolChest = warehouse.getToolChest(baseQuery);
   }
 
@@ -189,7 +201,7 @@ public class QueryLifecycle
         AuthorizationUtils.authorizeAllResourceActions(
             authenticationResult,
             Iterables.transform(
-                baseQuery.getDataSource().getNames(),
+                baseQuery.getDataSource().getTableNames(),
                 AuthorizationUtils.DATASOURCE_READ_RA_GENERATOR
             ),
             authorizerMapper
@@ -213,7 +225,7 @@ public class QueryLifecycle
         AuthorizationUtils.authorizeAllResourceActions(
             req,
             Iterables.transform(
-                baseQuery.getDataSource().getNames(),
+                baseQuery.getDataSource().getTableNames(),
                 AuthorizationUtils.DATASOURCE_READ_RA_GENERATOR
             ),
             authorizerMapper
@@ -318,14 +330,14 @@ public class QueryLifecycle
 
       if (e != null) {
         statsMap.put("exception", e.toString());
-
+        log.noStackTrace().warn(e, "Exception while processing queryId [%s]", baseQuery.getId());
         if (e instanceof QueryInterruptedException) {
           // Mimic behavior from QueryResource, where this code was originally taken from.
-          log.warn(e, "Exception while processing queryId [%s]", baseQuery.getId());
           statsMap.put("interrupted", true);
           statsMap.put("reason", e.toString());
         }
       }
+
       requestLogger.logNativeQuery(
           RequestLogLine.forNative(
               baseQuery,
@@ -351,6 +363,7 @@ public class QueryLifecycle
       throw new ISE("Not yet initialized");
     }
 
+    //noinspection unchecked
     return toolChest;
   }
 

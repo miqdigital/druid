@@ -29,7 +29,7 @@
     <parent>
         <groupId>org.apache.druid</groupId>
         <artifactId>druid</artifactId>
-        <version>0.17.0-incubating-SNAPSHOT</version>
+        <version>0.20.0-SNAPSHOT</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
@@ -137,6 +137,11 @@
                 <groupId>com.google.guava</groupId>
                 <artifactId>guava</artifactId>
               </exclusion>
+              <!-- Following are excluded to remove security vulnerabilities: -->
+              <exclusion>
+                <groupId>commons-beanutils</groupId>
+                <artifactId>commons-beanutils-core</artifactId>
+              </exclusion>
             </exclusions>
         </dependency>
         <dependency>
@@ -202,10 +207,6 @@
               <artifactId>jetty-util</artifactId>
             </exclusion>
             <exclusion>
-              <groupId>org.apache.hadoop</groupId>
-              <artifactId>hadoop-annotations</artifactId>
-            </exclusion>
-            <exclusion>
               <groupId>com.google.protobuf</groupId>
               <artifactId>protobuf-java</artifactId>
             </exclusion>
@@ -249,13 +250,18 @@
               <groupId>com.sun.jersey</groupId>
               <artifactId>jersey-server</artifactId>
             </exclusion>
+            <!-- Following are excluded to remove security vulnerabilities: -->
+            <exclusion>
+              <groupId>commons-beanutils</groupId>
+              <artifactId>commons-beanutils-core</artifactId>
+            </exclusion>
           </exclusions>
         </dependency>
         <dependency>
           <groupId>org.apache.hadoop</groupId>
           <artifactId>hadoop-aws</artifactId>
           <version>${hadoop.compile.version}</version>
-          <scope>provided</scope>
+          <scope>runtime</scope>
         </dependency>
         <dependency>
             <groupId>commons-io</groupId>
@@ -414,6 +420,13 @@
         <groupId>org.apache.druid</groupId>
         <artifactId>druid-processing</artifactId>
         <version>${project.parent.version}</version>
+        <scope>test</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.druid</groupId>
+        <artifactId>druid-core</artifactId>
+        <version>${project.parent.version}</version>
+        <classifier>tests</classifier>
         <scope>test</scope>
       </dependency>
     </dependencies>

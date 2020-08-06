@@ -22,11 +22,13 @@ package org.apache.druid.server.http;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Optional;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.inject.Inject;
 import com.sun.jersey.spi.container.ResourceFilters;
+import it.unimi.dsi.fastutil.objects.Object2LongMap;
 import org.apache.commons.lang.StringUtils;
 import org.apache.druid.client.CoordinatorServerView;
 import org.apache.druid.client.DruidDataSource;
@@ -44,11 +46,12 @@ import org.apache.druid.java.util.common.guava.Comparators;
 import org.apache.druid.java.util.common.guava.FunctionalIterable;
 import org.apache.druid.java.util.common.logger.Logger;
 import org.apache.druid.metadata.MetadataRuleManager;
-import org.apache.druid.metadata.MetadataSegmentManager;
-import org.apache.druid.metadata.UnknownSegmentIdException;
+import org.apache.druid.metadata.SegmentsMetadataManager;
+import org.apache.druid.metadata.UnknownSegmentIdsException;
 import org.apache.druid.query.SegmentDescriptor;
 import org.apache.druid.query.TableDataSource;
 import org.apache.druid.server.coordination.DruidServerMetadata;
+import org.apache.druid.server.coordinator.DruidCoordinator;
 import org.apache.druid.server.coordinator.rules.LoadRule;
 import org.apache.druid.server.coordinator.rules.Rule;
 import org.apache.druid.server.http.security.DatasourceResourceFilter;
@@ -96,34 +99,38 @@ import java.util.stream.Collectors;
 public class DataSourcesResource
 {
   private static final Logger log = new Logger(DataSourcesResource.class);
+  private static final long DEFAULT_LOADSTATUS_INTERVAL_OFFSET = 14 * 24 * 60 * 60 * 1000;
 
   private final CoordinatorServerView serverInventoryView;
-  private final MetadataSegmentManager segmentsMetadata;
+  private final SegmentsMetadataManager segmentsMetadataManager;
   private final MetadataRuleManager metadataRuleManager;
   private final IndexingServiceClient indexingServiceClient;
   private final AuthorizerMapper authorizerMapper;
+  private final DruidCoordinator coordinator;
 
   @Inject
   public DataSourcesResource(
       CoordinatorServerView serverInventoryView,
-      MetadataSegmentManager segmentsMetadata,
+      SegmentsMetadataManager segmentsMetadataManager,
       MetadataRuleManager metadataRuleManager,
       @Nullable IndexingServiceClient indexingServiceClient,
-      AuthorizerMapper authorizerMapper
+      AuthorizerMapper authorizerMapper,
+      DruidCoordinator coordinator
   )
   {
     this.serverInventoryView = serverInventoryView;
-    this.segmentsMetadata = segmentsMetadata;
+    this.segmentsMetadataManager = segmentsMetadataManager;
     this.metadataRuleManager = metadataRuleManager;
     this.indexingServiceClient = indexingServiceClient;
     this.authorizerMapper = authorizerMapper;
+    this.coordinator = coordinator;
   }
 
   @GET
   @Produces(MediaType.APPLICATION_JSON)
   public Response getQueryableDataSources(
-      @QueryParam("full") String full,
-      @QueryParam("simple") String simple,
+      @QueryParam("full") @Nullable String full,
+      @QueryParam("simple") @Nullable String simple,
       @Context final HttpServletRequest req
   )
   {
@@ -168,7 +175,7 @@ public class DataSourcesResource
 
   private interface MarkSegments
   {
-    int markSegments() throws UnknownSegmentIdException;
+    int markSegments() throws UnknownSegmentIdsException;
   }
 
   @POST
@@ -177,7 +184,7 @@ public class DataSourcesResource
   @ResourceFilters(DatasourceResourceFilter.class)
   public Response markAsUsedAllNonOvershadowedSegments(@PathParam("dataSourceName") final String dataSourceName)
   {
-    MarkSegments markSegments = () -> segmentsMetadata.markAsUsedAllNonOvershadowedSegmentsInDataSource(dataSourceName);
+    MarkSegments markSegments = () -> segmentsMetadataManager.markAsUsedAllNonOvershadowedSegmentsInDataSource(dataSourceName);
     return doMarkSegments("markAsUsedAllNonOvershadowedSegments", dataSourceName, markSegments);
   }
 
@@ -193,10 +200,10 @@ public class DataSourcesResource
     MarkSegments markSegments = () -> {
       final Interval interval = payload.getInterval();
       if (interval != null) {
-        return segmentsMetadata.markAsUsedNonOvershadowedSegmentsInInterval(dataSourceName, interval);
+        return segmentsMetadataManager.markAsUsedNonOvershadowedSegmentsInInterval(dataSourceName, interval);
       } else {
         final Set<String> segmentIds = payload.getSegmentIds();
-        return segmentsMetadata.markAsUsedNonOvershadowedSegments(dataSourceName, segmentIds);
+        return segmentsMetadataManager.markAsUsedNonOvershadowedSegments(dataSourceName, segmentIds);
       }
     };
     return doMarkSegmentsWithPayload("markAsUsedNonOvershadowedSegments", dataSourceName, payload, markSegments);
@@ -215,10 +222,10 @@ public class DataSourcesResource
     MarkSegments markSegments = () -> {
       final Interval interval = payload.getInterval();
       if (interval != null) {
-        return segmentsMetadata.markAsUnusedSegmentsInInterval(dataSourceName, interval);
+        return segmentsMetadataManager.markAsUnusedSegmentsInInterval(dataSourceName, interval);
       } else {
         final Set<String> segmentIds = payload.getSegmentIds();
-        return segmentsMetadata.markSegmentsAsUnused(dataSourceName, segmentIds);
+        return segmentsMetadataManager.markSegmentsAsUnused(dataSourceName, segmentIds);
       }
     };
     return doMarkSegmentsWithPayload("markSegmentsAsUnused", dataSourceName, payload, markSegments);
@@ -259,7 +266,7 @@ public class DataSourcesResource
       int numChangedSegments = markSegments.markSegments();
       return Response.ok(ImmutableMap.of("numChangedSegments", numChangedSegments)).build();
     }
-    catch (UnknownSegmentIdException e) {
+    catch (UnknownSegmentIdsException e) {
       log.warn("Segment ids %s are not found", e.getUnknownSegmentIds());
       return Response
           .status(Response.Status.NOT_FOUND)
@@ -279,15 +286,15 @@ public class DataSourcesResource
    * When this method is removed, a new method needs to be introduced corresponding to
    * the end point "DELETE /druid/coordinator/v1/datasources/{dataSourceName}" (with no query parameters).
    * Ultimately we want to have no method with kill parameter -
-   * DELETE `{dataSourceName}` will be used to mark all segments belonging to a data source as unused, and
-   * DELETE `{dataSourceName}/intervals/{interval}` will be used to kill segments within an interval
+   * DELETE `{dataSourceName}` to mark all segments belonging to a data source as unused, and
+   * DELETE `{dataSourceName}/intervals/{interval}` to kill unused segments within an interval
    */
   @DELETE
   @Deprecated
   @Path("/{dataSourceName}")
   @ResourceFilters(DatasourceResourceFilter.class)
   @Produces(MediaType.APPLICATION_JSON)
-  public Response markAsUnusedAllSegmentsOrKillSegmentsInInterval(
+  public Response markAsUnusedAllSegmentsOrKillUnusedSegmentsInInterval(
       @PathParam("dataSourceName") final String dataSourceName,
       @QueryParam("kill") final String kill,
       @QueryParam("interval") final String interval
@@ -299,9 +306,9 @@ public class DataSourcesResource
 
     boolean killSegments = kill != null && Boolean.valueOf(kill);
     if (killSegments) {
-      return killSegmentsInInterval(dataSourceName, interval);
+      return killUnusedSegmentsInInterval(dataSourceName, interval);
     } else {
-      MarkSegments markSegments = () -> segmentsMetadata.markAsUnusedAllSegmentsInDataSource(dataSourceName);
+      MarkSegments markSegments = () -> segmentsMetadataManager.markAsUnusedAllSegmentsInDataSource(dataSourceName);
       return doMarkSegments("markAsUnusedAllSegments", dataSourceName, markSegments);
     }
   }
@@ -310,7 +317,7 @@ public class DataSourcesResource
   @Path("/{dataSourceName}/intervals/{interval}")
   @ResourceFilters(DatasourceResourceFilter.class)
   @Produces(MediaType.APPLICATION_JSON)
-  public Response killSegmentsInInterval(
+  public Response killUnusedSegmentsInInterval(
       @PathParam("dataSourceName") final String dataSourceName,
       @PathParam("interval") final String interval
   )
@@ -323,7 +330,7 @@ public class DataSourcesResource
     }
     final Interval theInterval = Intervals.of(interval.replace('_', '/'));
     try {
-      indexingServiceClient.killSegments(dataSourceName, theInterval);
+      indexingServiceClient.killUnusedSegments(dataSourceName, theInterval);
       return Response.ok().build();
     }
     catch (Exception e) {
@@ -389,6 +396,130 @@ public class DataSourcesResource
       return Response.ok(segmentIds).build();
     }
     return getServedSegmentsInInterval(dataSourceName, full != null, theInterval::contains);
+  }
+
+  @GET
+  @Path("/{dataSourceName}/loadstatus")
+  @Produces(MediaType.APPLICATION_JSON)
+  @ResourceFilters(DatasourceResourceFilter.class)
+  public Response getDatasourceLoadstatus(
+      @PathParam("dataSourceName") String dataSourceName,
+      @QueryParam("forceMetadataRefresh") final Boolean forceMetadataRefresh,
+      @QueryParam("interval") @Nullable final String interval,
+      @QueryParam("simple") @Nullable final String simple,
+      @QueryParam("full") @Nullable final String full
+  )
+  {
+    if (forceMetadataRefresh == null) {
+      return Response
+          .status(Response.Status.BAD_REQUEST)
+          .entity("Invalid request. forceMetadataRefresh must be specified")
+          .build();
+    }
+    final Interval theInterval;
+    if (interval == null) {
+      long currentTimeInMs = System.currentTimeMillis();
+      theInterval = Intervals.utc(currentTimeInMs - DEFAULT_LOADSTATUS_INTERVAL_OFFSET, currentTimeInMs);
+    } else {
+      theInterval = Intervals.of(interval.replace('_', '/'));
+    }
+
+    Optional<Iterable<DataSegment>> segments = segmentsMetadataManager.iterateAllUsedNonOvershadowedSegmentsForDatasourceInterval(
+        dataSourceName,
+        theInterval,
+        forceMetadataRefresh
+    );
+
+    if (!segments.isPresent()) {
+      return logAndCreateDataSourceNotFoundResponse(dataSourceName);
+    }
+
+    if (Iterables.size(segments.get()) == 0) {
+      return Response
+          .status(Response.Status.NO_CONTENT)
+          .entity("No used segment found for the given datasource and interval")
+          .build();
+    }
+
+    if (simple != null) {
+      // Calculate response for simple mode
+      SegmentsLoadStatistics segmentsLoadStatistics = computeSegmentLoadStatistics(segments.get());
+      return Response.ok(
+          ImmutableMap.of(
+              dataSourceName,
+              segmentsLoadStatistics.getNumUnavailableSegments()
+          )
+      ).build();
+    } else if (full != null) {
+      // Calculate response for full mode
+      Map<String, Object2LongMap<String>> segmentLoadMap
+          = coordinator.computeUnderReplicationCountsPerDataSourcePerTierForSegments(segments.get());
+      if (segmentLoadMap.isEmpty()) {
+        return Response.serverError()
+                       .entity("Coordinator segment replicant lookup is not initialized yet. Try again later.")
+                       .build();
+      }
+      return Response.ok(segmentLoadMap).build();
+    } else {
+      // Calculate response for default mode
+      SegmentsLoadStatistics segmentsLoadStatistics = computeSegmentLoadStatistics(segments.get());
+      return Response.ok(
+          ImmutableMap.of(
+              dataSourceName,
+              100 * ((double) (segmentsLoadStatistics.getNumLoadedSegments()) / (double) segmentsLoadStatistics.getNumPublishedSegments())
+          )
+      ).build();
+    }
+  }
+
+  private SegmentsLoadStatistics computeSegmentLoadStatistics(Iterable<DataSegment> segments)
+  {
+    Map<SegmentId, SegmentLoadInfo> segmentLoadInfos = serverInventoryView.getSegmentLoadInfos();
+    int numPublishedSegments = 0;
+    int numUnavailableSegments = 0;
+    int numLoadedSegments = 0;
+    for (DataSegment segment : segments) {
+      numPublishedSegments++;
+      if (!segmentLoadInfos.containsKey(segment.getId())) {
+        numUnavailableSegments++;
+      } else {
+        numLoadedSegments++;
+      }
+    }
+    return new SegmentsLoadStatistics(numPublishedSegments, numUnavailableSegments, numLoadedSegments);
+  }
+
+  private static class SegmentsLoadStatistics
+  {
+    private int numPublishedSegments;
+    private int numUnavailableSegments;
+    private int numLoadedSegments;
+
+    SegmentsLoadStatistics(
+        int numPublishedSegments,
+        int numUnavailableSegments,
+        int numLoadedSegments
+    )
+    {
+      this.numPublishedSegments = numPublishedSegments;
+      this.numUnavailableSegments = numUnavailableSegments;
+      this.numLoadedSegments = numLoadedSegments;
+    }
+
+    public int getNumPublishedSegments()
+    {
+      return numPublishedSegments;
+    }
+
+    public int getNumUnavailableSegments()
+    {
+      return numUnavailableSegments;
+    }
+
+    public int getNumLoadedSegments()
+    {
+      return numLoadedSegments;
+    }
   }
 
   /**
@@ -502,7 +633,7 @@ public class DataSourcesResource
       @PathParam("segmentId") String segmentId
   )
   {
-    boolean segmentStateChanged = segmentsMetadata.markSegmentAsUnused(segmentId);
+    boolean segmentStateChanged = segmentsMetadataManager.markSegmentAsUnused(segmentId);
     return Response.ok(ImmutableMap.of("segmentStateChanged", segmentStateChanged)).build();
   }
 
@@ -515,7 +646,7 @@ public class DataSourcesResource
       @PathParam("segmentId") String segmentId
   )
   {
-    boolean segmentStateChanged = segmentsMetadata.markSegmentAsUsed(segmentId);
+    boolean segmentStateChanged = segmentsMetadataManager.markSegmentAsUsed(segmentId);
     return Response.ok().entity(ImmutableMap.of("segmentStateChanged", segmentStateChanged)).build();
   }
 
@@ -769,7 +900,7 @@ public class DataSourcesResource
           && segmentLoadInfo.getSegment().getShardSpec().getPartitionNum() == descriptor.getPartitionNumber()
           && segmentLoadInfo.getSegment().getVersion().compareTo(descriptor.getVersion()) >= 0
           && Iterables.any(
-          segmentLoadInfo.getServers(), DruidServerMetadata::segmentReplicatable
+          segmentLoadInfo.getServers(), DruidServerMetadata::isSegmentReplicationTarget
       )) {
         return true;
       }

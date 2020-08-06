@@ -66,6 +66,20 @@ Other common reasons that hand-off fails are as follows:
 
 Make sure to include the `druid-hdfs-storage` and all the hadoop configuration, dependencies (that can be obtained by running command `hadoop classpath` on a machine where hadoop has been setup) in the classpath. And, provide necessary HDFS settings as described in [deep storage](../dependencies/deep-storage.md) .
 
+## How do I know when I can make query to Druid after submitting batch ingestion task?
+
+You can verify if segments created by a recent ingestion task are loaded onto historicals and available for querying using the following workflow.
+1. Submit your ingestion task.
+2. Repeatedly poll the [Overlord's tasks API](../operations/api-reference.md#tasks) ( `/druid/indexer/v1/task/{taskId}/status`) until your task is shown to be successfully completed.
+3. Poll the [Segment Loading by Datasource API](../operations/api-reference.md#segment-loading-by-datasource) (`/druid/coordinator/v1/datasources/{dataSourceName}/loadstatus`) with 
+`forceMetadataRefresh=true` and `interval=<INTERVAL_OF_INGESTED_DATA>` once. 
+(Note: `forceMetadataRefresh=true` refreshes Coordinator's metadata cache of all datasources. This can be a heavy operation in terms of the load on the metadata store but is necessary to make sure that we verify all the latest segments' load status)
+If there are segments not yet loaded, continue to step 4, otherwise you can now query the data.
+4. Repeatedly poll the [Segment Loading by Datasource API](../operations/api-reference.md#segment-loading-by-datasource) (`/druid/coordinator/v1/datasources/{dataSourceName}/loadstatus`) with 
+`forceMetadataRefresh=false` and `interval=<INTERVAL_OF_INGESTED_DATA>`. 
+Continue polling until all segments are loaded. Once all segments are loaded you can now query the data. 
+Note that this workflow only guarantees that the segments are available at the time of the [Segment Loading by Datasource API](../operations/api-reference.md#segment-loading-by-datasource) call. Segments can still become missing because of historical process failures or any other reasons afterward.
+
 ## I don't see my Druid segments on my Historical processes
 
 You can check the Coordinator console located at `<COORDINATOR_IP>:<PORT>`. Make sure that your segments have actually loaded on [Historical processes](../design/historical.md). If your segments are not present, check the Coordinator logs for messages about capacity of replication errors. One reason that segments are not downloaded is because Historical processes have maxSizes that are too small, making them incapable of downloading more data. You can change that with (for example):
@@ -81,8 +95,8 @@ You can use a [segment metadata query](../querying/segmentmetadataquery.md) for 
 
 ## How can I Reindex existing data in Druid with schema changes?
 
-You can use IngestSegmentFirehose with index task to ingest existing druid segments using a new schema and change the name, dimensions, metrics, rollup, etc. of the segment.
-See [Firehose](../ingestion/native-batch.md#firehoses) for more details on IngestSegmentFirehose.
+You can use DruidInputSource with the [Parallel task](../ingestion/native-batch.md) to ingest existing druid segments using a new schema and change the name, dimensions, metrics, rollup, etc. of the segment.
+See [DruidInputSource](../ingestion/native-batch.md#druid-input-source) for more details.
 Or, if you use hadoop based ingestion, then you can use "dataSource" input spec to do reindexing.
 
 See the [Update existing data](../ingestion/data-management.md#update) section of the data management page for more details.
@@ -91,7 +105,7 @@ See the [Update existing data](../ingestion/data-management.md#update) section o
 
 In a lot of situations you may want to lower the granularity of older data. Example, any data older than 1 month has only hour level granularity but newer data has minute level granularity. This use case is same as re-indexing.
 
-To do this use the IngestSegmentFirehose and run an indexer task. The IngestSegment firehose will allow you to take in existing segments from Druid and aggregate them and feed them back into Druid. It will also allow you to filter the data in those segments while feeding it back in. This means if there are rows you want to delete, you can just filter them away during re-ingestion.
+To do this use the [DruidInputSource](../ingestion/native-batch.md#druid-input-source) and run a [Parallel task](../ingestion/native-batch.md). The DruidInputSource will allow you to take in existing segments from Druid and aggregate them and feed them back into Druid. It will also allow you to filter the data in those segments while feeding it back in. This means if there are rows you want to delete, you can just filter them away during re-ingestion.
 Typically the above will be run as a batch job to say everyday feed in a chunk of data and aggregate it.
 Or, if you use hadoop based ingestion, then you can use "dataSource" input spec to do reindexing.
 

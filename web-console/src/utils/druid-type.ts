@@ -30,7 +30,7 @@ export function guessTypeFromSample(sample: any[]): string {
     if (definedValues.every(v => v % 1 === 0)) {
       return 'long';
     } else {
-      return 'float';
+      return 'double';
     }
   } else {
     return 'string';
@@ -62,7 +62,7 @@ export function getDimensionSpecs(
   });
 }
 
-export function getMetricSecs(headerAndRows: HeaderAndRows): MetricSpec[] {
+export function getMetricSpecs(headerAndRows: HeaderAndRows): MetricSpec[] {
   return [{ name: 'count', type: 'count' }].concat(
     filterMap(headerAndRows.header, h => {
       if (h === '__time') return;
@@ -88,32 +88,28 @@ export function updateSchemaWithSample(
   let newSpec = spec;
 
   if (dimensionMode === 'auto-detect') {
-    newSpec = deepSet(newSpec, 'dataSchema.parser.parseSpec.dimensionsSpec.dimensions', []);
+    newSpec = deepSet(newSpec, 'spec.dataSchema.dimensionsSpec.dimensions', []);
   } else {
-    newSpec = deepDelete(newSpec, 'dataSchema.parser.parseSpec.dimensionsSpec.dimensionExclusions');
+    newSpec = deepDelete(newSpec, 'spec.dataSchema.dimensionsSpec.dimensionExclusions');
 
     const dimensions = getDimensionSpecs(headerAndRows, rollup);
     if (dimensions) {
-      newSpec = deepSet(
-        newSpec,
-        'dataSchema.parser.parseSpec.dimensionsSpec.dimensions',
-        dimensions,
-      );
+      newSpec = deepSet(newSpec, 'spec.dataSchema.dimensionsSpec.dimensions', dimensions);
     }
   }
 
   if (rollup) {
-    newSpec = deepSet(newSpec, 'dataSchema.granularitySpec.queryGranularity', 'HOUR');
+    newSpec = deepSet(newSpec, 'spec.dataSchema.granularitySpec.queryGranularity', 'HOUR');
 
-    const metrics = getMetricSecs(headerAndRows);
+    const metrics = getMetricSpecs(headerAndRows);
     if (metrics) {
-      newSpec = deepSet(newSpec, 'dataSchema.metricsSpec', metrics);
+      newSpec = deepSet(newSpec, 'spec.dataSchema.metricsSpec', metrics);
     }
   } else {
-    newSpec = deepSet(newSpec, 'dataSchema.granularitySpec.queryGranularity', 'NONE');
-    newSpec = deepDelete(newSpec, 'dataSchema.metricsSpec');
+    newSpec = deepSet(newSpec, 'spec.dataSchema.granularitySpec.queryGranularity', 'NONE');
+    newSpec = deepDelete(newSpec, 'spec.dataSchema.metricsSpec');
   }
 
-  newSpec = deepSet(newSpec, 'dataSchema.granularitySpec.rollup', rollup);
+  newSpec = deepSet(newSpec, 'spec.dataSchema.granularitySpec.rollup', rollup);
   return newSpec;
 }

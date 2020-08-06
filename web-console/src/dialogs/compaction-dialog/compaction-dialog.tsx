@@ -20,7 +20,7 @@ import { Button, Classes, Dialog, Intent } from '@blueprintjs/core';
 import React from 'react';
 
 import { AutoForm, ExternalLink } from '../../components';
-import { DRUID_DOCS_VERSION } from '../../variables';
+import { getLink } from '../../links';
 
 import './compaction-dialog.scss';
 
@@ -109,23 +109,14 @@ export class CompactionDialog extends React.PureComponent<
               name: 'maxRowsPerSegment',
               type: 'number',
               defaultValue: CompactionDialog.DEFAULT_MAX_ROWS_PER_SEGMENT,
-              info: (
-                <p>
-                  The target segment size, for each segment, after compaction. The actual sizes of
-                  compacted segments might be slightly larger or smaller than this value. Each
-                  compaction task may generate more than one output segment, and it will try to keep
-                  each output segment close to this configured size.
-                </p>
-              ),
+              info: <p>Determines how many rows are in each segment.</p>,
             },
             {
               name: 'taskContext',
               type: 'json',
               info: (
                 <p>
-                  <ExternalLink
-                    href={`https://druid.apache.org/docs/${DRUID_DOCS_VERSION}/ingestion/tasks.html#task-context`}
-                  >
+                  <ExternalLink href={`${getLink('DOCS')}/ingestion/tasks.html#task-context`}>
                     Task context
                   </ExternalLink>{' '}
                   for compaction tasks.
@@ -144,7 +135,7 @@ export class CompactionDialog extends React.PureComponent<
               info: (
                 <p>
                   <ExternalLink
-                    href={`https://druid.apache.org/docs/${DRUID_DOCS_VERSION}/configuration/index.html#compact-task-tuningconfig`}
+                    href={`${getLink('DOCS')}/configuration/index.html#compact-task-tuningconfig`}
                   >
                     Tuning config
                   </ExternalLink>{' '}

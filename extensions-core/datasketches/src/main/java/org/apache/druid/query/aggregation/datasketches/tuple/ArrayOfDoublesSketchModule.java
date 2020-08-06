@@ -23,7 +23,7 @@ import com.fasterxml.jackson.databind.Module;
 import com.fasterxml.jackson.databind.jsontype.NamedType;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.google.inject.Binder;
-import com.yahoo.sketches.tuple.ArrayOfDoublesSketch;
+import org.apache.datasketches.tuple.ArrayOfDoublesSketch;
 import org.apache.druid.initialization.DruidModule;
 import org.apache.druid.segment.serde.ComplexMetrics;
 
@@ -34,7 +34,7 @@ import java.util.List;
  * This module is to support numeric Tuple sketches, which extend the functionality of the count-distinct
  * Theta sketches by adding arrays of double values associated with unique keys.
  * 
- * See <a href=https://datasketches.github.io/docs/Tuple/TupleOverview.html>Tuple Sketch Overview</a>
+ * See <a href=https://datasketches.apache.org/docs/Tuple/TupleOverview.html>Tuple Sketch Overview</a>
  */
 public class ArrayOfDoublesSketchModule implements DruidModule
 {

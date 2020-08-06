@@ -29,6 +29,7 @@ import './ace-modes/dsql';
 import './ace-modes/hjson';
 import './bootstrap/react-table-defaults';
 import { ConsoleApplication } from './console-application';
+import { Links, setLinkOverrides } from './links';
 import { UrlBaser } from './singletons/url-baser';
 
 import './entry.scss';
@@ -37,13 +38,30 @@ const container = document.getElementsByClassName('app-container')[0];
 if (!container) throw new Error('container not found');
 
 interface ConsoleConfig {
+  // A custom title for the page
   title?: string;
-  hideLegacy?: boolean;
+
+  // An alternative URL which to use for the stem of an AJAX call
   baseURL?: string;
+
+  // A custom header name/value to set on every AJAX request
   customHeaderName?: string;
   customHeaderValue?: string;
+
+  // A set of custom headers name/value to set on every AJAX request
   customHeaders?: Record<string, string>;
+
+  // The URL for where to load the example manifest, a JSON document that tells the console where to find all the example datasets
   exampleManifestsUrl?: string;
+
+  // The query context to set if the user does not have one saved in local storage, defaults to {}
+  defaultQueryContext?: Record<string, any>;
+
+  // Extra context properties that will be added to all query requests
+  mandatoryQueryContext?: Record<string, any>;
+
+  // Allow for link overriding to different docs
+  linkOverrides?: Links;
 }
 
 const consoleConfig: ConsoleConfig = (window as any).consoleConfig;
@@ -61,11 +79,15 @@ if (consoleConfig.customHeaderName && consoleConfig.customHeaderValue) {
 if (consoleConfig.customHeaders) {
   Object.assign(axios.defaults.headers, consoleConfig.customHeaders);
 }
+if (consoleConfig.linkOverrides) {
+  setLinkOverrides(consoleConfig.linkOverrides);
+}
 
 ReactDOM.render(
   React.createElement(ConsoleApplication, {
-    hideLegacy: Boolean(consoleConfig.hideLegacy),
     exampleManifestsUrl: consoleConfig.exampleManifestsUrl,
+    defaultQueryContext: consoleConfig.defaultQueryContext,
+    mandatoryQueryContext: consoleConfig.mandatoryQueryContext,
   }) as any,
   container,
 );

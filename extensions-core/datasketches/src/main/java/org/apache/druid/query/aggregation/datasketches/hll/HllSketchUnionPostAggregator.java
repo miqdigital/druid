@@ -21,9 +21,9 @@ package org.apache.druid.query.aggregation.datasketches.hll;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.yahoo.sketches.hll.HllSketch;
-import com.yahoo.sketches.hll.TgtHllType;
-import com.yahoo.sketches.hll.Union;
+import org.apache.datasketches.hll.HllSketch;
+import org.apache.datasketches.hll.TgtHllType;
+import org.apache.datasketches.hll.Union;
 import org.apache.druid.query.aggregation.AggregatorFactory;
 import org.apache.druid.query.aggregation.AggregatorUtil;
 import org.apache.druid.query.aggregation.PostAggregator;
@@ -122,50 +122,6 @@ public class HllSketchUnionPostAggregator implements PostAggregator
   }
 
   @Override
-  public String toString()
-  {
-    return getClass().getSimpleName() + "{" +
-        "name='" + name + '\'' +
-        ", fields=" + fields +
-        "lgK=" + lgK +
-        "tgtHllType=" + tgtHllType +
-        "}";
-  }
-
-  @Override
-  public boolean equals(final Object o)
-  {
-    if (this == o) {
-      return true;
-    }
-    if (!(o instanceof HllSketchUnionPostAggregator)) {
-      return false;
-    }
-
-    final HllSketchUnionPostAggregator that = (HllSketchUnionPostAggregator) o;
-
-    if (!name.equals(that.name)) {
-      return false;
-    }
-    if (!fields.equals(that.fields)) {
-      return false;
-    }
-    if (lgK != that.getLgK()) {
-      return false;
-    }
-    if (!tgtHllType.equals(that.tgtHllType)) {
-      return false;
-    }
-    return true;
-  }
-
-  @Override
-  public int hashCode()
-  {
-    return Objects.hash(name, fields, lgK, tgtHllType);
-  }
-
-  @Override
   public byte[] getCacheKey()
   {
     return new CacheKeyBuilder(AggregatorUtil.HLL_SKETCH_UNION_CACHE_TYPE_ID)
@@ -176,4 +132,36 @@ public class HllSketchUnionPostAggregator implements PostAggregator
         .build();
   }
 
+  @Override
+  public String toString()
+  {
+    return getClass().getSimpleName() + "{" +
+        "name='" + name + '\'' +
+        ", fields=" + fields +
+        ", lgK=" + lgK +
+        ", tgtHllType=" + tgtHllType +
+        "}";
+  }
+
+  @Override
+  public boolean equals(Object o)
+  {
+    if (this == o) {
+      return true;
+    }
+    if (o == null || getClass() != o.getClass()) {
+      return false;
+    }
+    HllSketchUnionPostAggregator that = (HllSketchUnionPostAggregator) o;
+    return lgK == that.lgK &&
+           name.equals(that.name) &&
+           fields.equals(that.fields) &&
+           tgtHllType == that.tgtHllType;
+  }
+
+  @Override
+  public int hashCode()
+  {
+    return Objects.hash(name, fields, lgK, tgtHllType);
+  }
 }

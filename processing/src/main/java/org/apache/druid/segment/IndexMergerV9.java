@@ -27,10 +27,10 @@ import com.google.common.collect.Lists;
 import com.google.common.io.Files;
 import com.google.common.primitives.Ints;
 import com.google.inject.Inject;
-import org.apache.commons.io.FileUtils;
 import org.apache.druid.common.config.NullHandling;
 import org.apache.druid.io.ZeroCopyByteArrayOutputStream;
 import org.apache.druid.java.util.common.DateTimes;
+import org.apache.druid.java.util.common.FileUtils;
 import org.apache.druid.java.util.common.IAE;
 import org.apache.druid.java.util.common.ISE;
 import org.apache.druid.java.util.common.JodaUtils;
@@ -49,6 +49,7 @@ import org.apache.druid.segment.data.GenericIndexed;
 import org.apache.druid.segment.incremental.IncrementalIndex;
 import org.apache.druid.segment.incremental.IncrementalIndexAdapter;
 import org.apache.druid.segment.loading.MMappedQueryableSegmentizerFactory;
+import org.apache.druid.segment.loading.SegmentizerFactory;
 import org.apache.druid.segment.serde.ColumnPartSerde;
 import org.apache.druid.segment.serde.ComplexColumnPartSerde;
 import org.apache.druid.segment.serde.ComplexMetricSerde;
@@ -138,28 +139,33 @@ public class IndexMergerV9 implements IndexMerger
     Closer closer = Closer.create();
     try {
       final FileSmoosher v9Smoosher = new FileSmoosher(outDir);
-      FileUtils.forceMkdir(outDir);
+      org.apache.commons.io.FileUtils.forceMkdir(outDir);
 
       SegmentWriteOutMediumFactory omf = segmentWriteOutMediumFactory != null ? segmentWriteOutMediumFactory
                                                                               : defaultSegmentWriteOutMediumFactory;
-      log.info("Using SegmentWriteOutMediumFactory[%s]", omf.getClass().getSimpleName());
+      log.debug("Using SegmentWriteOutMediumFactory[%s]", omf.getClass().getSimpleName());
       SegmentWriteOutMedium segmentWriteOutMedium = omf.makeSegmentWriteOutMedium(outDir);
       closer.register(segmentWriteOutMedium);
       long startTime = System.currentTimeMillis();
       Files.asByteSink(new File(outDir, "version.bin")).write(Ints.toByteArray(IndexIO.V9_VERSION));
-      log.info("Completed version.bin in %,d millis.", System.currentTimeMillis() - startTime);
+      log.debug("Completed version.bin in %,d millis.", System.currentTimeMillis() - startTime);
 
       progress.progress();
       startTime = System.currentTimeMillis();
       try (FileOutputStream fos = new FileOutputStream(new File(outDir, "factory.json"))) {
-        mapper.writeValue(fos, new MMappedQueryableSegmentizerFactory(indexIO));
+        SegmentizerFactory customSegmentLoader = indexSpec.getSegmentLoader();
+        if (customSegmentLoader != null) {
+          mapper.writeValue(fos, customSegmentLoader);
+        } else {
+          mapper.writeValue(fos, new MMappedQueryableSegmentizerFactory(indexIO));
+        }
       }
-      log.info("Completed factory.json in %,d millis", System.currentTimeMillis() - startTime);
+      log.debug("Completed factory.json in %,d millis", System.currentTimeMillis() - startTime);
 
       progress.progress();
       final Map<String, ValueType> metricsValueTypes = new TreeMap<>(Comparators.naturalNullsFirst());
       final Map<String, String> metricTypeNames = new TreeMap<>(Comparators.naturalNullsFirst());
-      final List<ColumnCapabilitiesImpl> dimCapabilities = Lists.newArrayListWithCapacity(mergedDimensions.size());
+      final List<ColumnCapabilities> dimCapabilities = Lists.newArrayListWithCapacity(mergedDimensions.size());
       mergeCapabilities(adapters, mergedDimensions, metricsValueTypes, metricTypeNames, dimCapabilities);
 
       final Map<String, DimensionHandler> handlers = makeDimensionHandlers(mergedDimensions, dimCapabilities);
@@ -173,7 +179,7 @@ public class IndexMergerV9 implements IndexMerger
       progress.progress();
       startTime = System.currentTimeMillis();
       writeDimValuesAndSetupDimConversion(adapters, progress, mergedDimensions, mergers);
-      log.info("Completed dim conversions in %,d millis.", System.currentTimeMillis() - startTime);
+      log.debug("Completed dim conversions in %,d millis.", System.currentTimeMillis() - startTime);
 
       /************* Walk through data sets, merge them, and write merged columns *************/
       progress.progress();
@@ -272,8 +278,7 @@ public class IndexMergerV9 implements IndexMerger
 
     long startTime = System.currentTimeMillis();
     final Set<String> finalDimensions = new LinkedHashSet<>();
-    final Set<String> finalColumns = new LinkedHashSet<>();
-    finalColumns.addAll(mergedMetrics);
+    final Set<String> finalColumns = new LinkedHashSet<>(mergedMetrics);
     for (int i = 0; i < mergedDimensions.size(); ++i) {
       if (mergers.get(i).canSkip()) {
         continue;
@@ -311,7 +316,7 @@ public class IndexMergerV9 implements IndexMerger
     writer.close();
 
     IndexIO.checkFileSize(new File(outDir, "index.drd"));
-    log.info("Completed index.drd in %,d millis.", System.currentTimeMillis() - startTime);
+    log.debug("Completed index.drd in %,d millis.", System.currentTimeMillis() - startTime);
 
     progress.stopSection(section);
   }
@@ -365,9 +370,9 @@ public class IndexMergerV9 implements IndexMerger
           throw new ISE("Unknown type[%s]", type);
       }
       makeColumn(v9Smoosher, metric, builder.build());
-      log.info("Completed metric column[%s] in %,d millis.", metric, System.currentTimeMillis() - metricStartTime);
+      log.debug("Completed metric column[%s] in %,d millis.", metric, System.currentTimeMillis() - metricStartTime);
     }
-    log.info("Completed metric columns in %,d millis.", System.currentTimeMillis() - startTime);
+    log.debug("Completed metric columns in %,d millis.", System.currentTimeMillis() - startTime);
     progress.stopSection(section);
   }
 
@@ -439,7 +444,7 @@ public class IndexMergerV9 implements IndexMerger
         .addSerde(createLongColumnPartSerde(timeWriter, indexSpec))
         .build();
     makeColumn(v9Smoosher, ColumnHolder.TIME_COLUMN_NAME, serdeficator);
-    log.info("Completed time column in %,d millis.", System.currentTimeMillis() - startTime);
+    log.debug("Completed time column in %,d millis.", System.currentTimeMillis() - startTime);
     progress.stopSection(section);
   }
 
@@ -545,7 +550,7 @@ public class IndexMergerV9 implements IndexMerger
       }
 
       if ((++rowCount % 500000) == 0) {
-        log.info("walked 500,000/%d rows in %,d millis.", rowCount, System.currentTimeMillis() - time);
+        log.debug("walked 500,000/%d rows in %,d millis.", rowCount, System.currentTimeMillis() - time);
         time = System.currentTimeMillis();
       }
     }
@@ -554,7 +559,7 @@ public class IndexMergerV9 implements IndexMerger
         rowNumConversion.rewind();
       }
     }
-    log.info("completed walk through of %,d rows in %,d millis.", rowCount, System.currentTimeMillis() - startTime);
+    log.debug("completed walk through of %,d rows in %,d millis.", rowCount, System.currentTimeMillis() - startTime);
     progress.stopSection(section);
     return rowNumConversions;
   }
@@ -622,6 +627,7 @@ public class IndexMergerV9 implements IndexMerger
     // If using default values for null use LongColumnSerializer to allow rollback to previous versions.
     if (NullHandling.replaceWithDefault()) {
       return LongColumnSerializer.create(
+          columnName,
           segmentWriteOutMedium,
           columnName,
           indexSpec.getMetricCompression(),
@@ -629,6 +635,7 @@ public class IndexMergerV9 implements IndexMerger
       );
     } else {
       return LongColumnSerializerV2.create(
+          columnName,
           segmentWriteOutMedium,
           columnName,
           indexSpec.getMetricCompression(),
@@ -647,12 +654,14 @@ public class IndexMergerV9 implements IndexMerger
     // If using default values for null use DoubleColumnSerializer to allow rollback to previous versions.
     if (NullHandling.replaceWithDefault()) {
       return DoubleColumnSerializer.create(
+          columnName,
           segmentWriteOutMedium,
           columnName,
           indexSpec.getMetricCompression()
       );
     } else {
       return DoubleColumnSerializerV2.create(
+          columnName,
           segmentWriteOutMedium,
           columnName,
           indexSpec.getMetricCompression(),
@@ -670,12 +679,14 @@ public class IndexMergerV9 implements IndexMerger
     // If using default values for null use FloatColumnSerializer to allow rollback to previous versions.
     if (NullHandling.replaceWithDefault()) {
       return FloatColumnSerializer.create(
+          columnName,
           segmentWriteOutMedium,
           columnName,
           indexSpec.getMetricCompression()
       );
     } else {
       return FloatColumnSerializerV2.create(
+          columnName,
           segmentWriteOutMedium,
           columnName,
           indexSpec.getMetricCompression(),
@@ -705,18 +716,22 @@ public class IndexMergerV9 implements IndexMerger
       final List<String> mergedDimensions,
       final Map<String, ValueType> metricsValueTypes,
       final Map<String, String> metricTypeNames,
-      final List<ColumnCapabilitiesImpl> dimCapabilities
+      final List<ColumnCapabilities> dimCapabilities
   )
   {
-    final Map<String, ColumnCapabilitiesImpl> capabilitiesMap = new HashMap<>();
+    final Map<String, ColumnCapabilities> capabilitiesMap = new HashMap<>();
     for (IndexableAdapter adapter : adapters) {
       for (String dimension : adapter.getDimensionNames()) {
         ColumnCapabilities capabilities = adapter.getCapabilities(dimension);
-        capabilitiesMap.computeIfAbsent(dimension, d -> new ColumnCapabilitiesImpl().setIsComplete(true)).merge(capabilities);
+        capabilitiesMap.compute(dimension, (d, existingCapabilities) ->
+            ColumnCapabilitiesImpl.snapshot(capabilities)
+                                  .merge(ColumnCapabilitiesImpl.snapshot(existingCapabilities)));
       }
       for (String metric : adapter.getMetricNames()) {
         ColumnCapabilities capabilities = adapter.getCapabilities(metric);
-        capabilitiesMap.computeIfAbsent(metric, m -> new ColumnCapabilitiesImpl().setIsComplete(true)).merge(capabilities);
+        capabilitiesMap.compute(metric, (m, existingCapabilities) ->
+            ColumnCapabilitiesImpl.snapshot(capabilities)
+                                  .merge(ColumnCapabilitiesImpl.snapshot(existingCapabilities)));
         metricsValueTypes.put(metric, capabilities.getType());
         metricTypeNames.put(metric, adapter.getMetricType(metric));
       }
@@ -774,9 +789,9 @@ public class IndexMergerV9 implements IndexMerger
       );
     }
 
-    FileUtils.forceMkdir(outDir);
+    org.apache.commons.io.FileUtils.forceMkdir(outDir);
 
-    log.info("Starting persist for interval[%s], rows[%,d]", dataInterval, index.size());
+    log.debug("Starting persist for interval[%s], rows[%,d]", dataInterval, index.size());
     return merge(
         Collections.singletonList(
             new IncrementalIndexAdapter(
@@ -864,7 +879,7 @@ public class IndexMergerV9 implements IndexMerger
   ) throws IOException
   {
     FileUtils.deleteDirectory(outDir);
-    FileUtils.forceMkdir(outDir);
+    org.apache.commons.io.FileUtils.forceMkdir(outDir);
 
     final List<String> mergedDimensions = IndexMerger.getMergedDimensions(indexes);
 
@@ -967,7 +982,7 @@ public class IndexMergerV9 implements IndexMerger
   ) throws IOException
   {
     FileUtils.deleteDirectory(outDir);
-    FileUtils.forceMkdir(outDir);
+    org.apache.commons.io.FileUtils.forceMkdir(outDir);
 
     final List<String> mergedDimensions = IndexMerger.getMergedDimensions(indexes);
 
@@ -991,7 +1006,7 @@ public class IndexMergerV9 implements IndexMerger
 
   private Map<String, DimensionHandler> makeDimensionHandlers(
       final List<String> mergedDimensions,
-      final List<ColumnCapabilitiesImpl> dimCapabilities
+      final List<ColumnCapabilities> dimCapabilities
   )
   {
     Map<String, DimensionHandler> handlers = new LinkedHashMap<>();
