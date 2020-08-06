@@ -80,7 +80,7 @@ public class GroupByQueryConfig
   private boolean forcePushDownLimit = false;
 
   @JsonProperty
-  private boolean applyLimitPushDownToSegment = true;
+  private boolean applyLimitPushDownToSegment = false;
 
   @JsonProperty
   private boolean forcePushDownNestedQuery = false;
@@ -95,7 +95,7 @@ public class GroupByQueryConfig
   private int numParallelCombineThreads = 1;
 
   @JsonProperty
-  private boolean vectorize = false;
+  private boolean vectorize = true;
 
   public String getDefaultStrategy()
   {

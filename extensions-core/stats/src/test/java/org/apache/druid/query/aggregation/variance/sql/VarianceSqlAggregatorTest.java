@@ -22,6 +22,7 @@ package org.apache.druid.query.aggregation.variance.sql;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
+import org.apache.calcite.schema.SchemaPlus;
 import org.apache.druid.common.config.NullHandling;
 import org.apache.druid.data.input.InputRow;
 import org.apache.druid.data.input.impl.DimensionSchema;
@@ -33,7 +34,6 @@ import org.apache.druid.data.input.impl.LongDimensionSchema;
 import org.apache.druid.data.input.impl.MapInputRowParser;
 import org.apache.druid.data.input.impl.TimeAndDimsParseSpec;
 import org.apache.druid.data.input.impl.TimestampSpec;
-import org.apache.druid.java.util.common.Pair;
 import org.apache.druid.java.util.common.granularity.Granularities;
 import org.apache.druid.java.util.common.io.Closer;
 import org.apache.druid.query.Druids;
@@ -49,6 +49,7 @@ import org.apache.druid.segment.QueryableIndex;
 import org.apache.druid.segment.column.ValueType;
 import org.apache.druid.segment.incremental.IncrementalIndexSchema;
 import org.apache.druid.segment.writeout.OffHeapMemorySegmentWriteOutMediumFactory;
+import org.apache.druid.server.QueryStackTests;
 import org.apache.druid.server.security.AuthTestUtils;
 import org.apache.druid.server.security.AuthenticationResult;
 import org.apache.druid.sql.SqlLifecycle;
@@ -58,11 +59,11 @@ import org.apache.druid.sql.calcite.filtration.Filtration;
 import org.apache.druid.sql.calcite.planner.DruidOperatorTable;
 import org.apache.druid.sql.calcite.planner.PlannerConfig;
 import org.apache.druid.sql.calcite.planner.PlannerFactory;
-import org.apache.druid.sql.calcite.schema.DruidSchema;
-import org.apache.druid.sql.calcite.schema.SystemSchema;
+import org.apache.druid.sql.calcite.util.CalciteTestBase;
 import org.apache.druid.sql.calcite.util.CalciteTests;
 import org.apache.druid.sql.calcite.util.QueryLogHook;
 import org.apache.druid.sql.calcite.util.SpecificSegmentsQuerySegmentWalker;
+import org.apache.druid.testing.InitializedNullHandlingTest;
 import org.apache.druid.timeline.DataSegment;
 import org.apache.druid.timeline.partition.LinearShardSpec;
 import org.junit.After;
@@ -77,7 +78,7 @@ import org.junit.rules.TemporaryFolder;
 import java.io.IOException;
 import java.util.List;
 
-public class VarianceSqlAggregatorTest
+public class VarianceSqlAggregatorTest extends InitializedNullHandlingTest
 {
   private static AuthenticationResult authenticationResult = CalciteTests.REGULAR_USER_AUTH_RESULT;
   private static final String DATA_SOURCE = "numfoo";
@@ -88,10 +89,8 @@ public class VarianceSqlAggregatorTest
   @BeforeClass
   public static void setUpClass()
   {
-    final Pair<QueryRunnerFactoryConglomerate, Closer> conglomerateCloserPair = CalciteTests
-        .createQueryRunnerFactoryConglomerate();
-    conglomerate = conglomerateCloserPair.lhs;
-    resourceCloser = conglomerateCloserPair.rhs;
+    resourceCloser = Closer.create();
+    conglomerate = QueryStackTests.createQueryRunnerFactoryConglomerate(resourceCloser);
   }
 
   @AfterClass
@@ -156,8 +155,6 @@ public class VarianceSqlAggregatorTest
     );
 
     final PlannerConfig plannerConfig = new PlannerConfig();
-    final DruidSchema druidSchema = CalciteTests.createMockSchema(conglomerate, walker, plannerConfig);
-    final SystemSchema systemSchema = CalciteTests.createMockSystemSchema(druidSchema, walker, plannerConfig);
     final DruidOperatorTable operatorTable = new DruidOperatorTable(
         ImmutableSet.of(
             new BaseVarianceSqlAggregator.VarPopSqlAggregator(),
@@ -169,17 +166,19 @@ public class VarianceSqlAggregatorTest
         ),
         ImmutableSet.of()
     );
+    SchemaPlus rootSchema =
+        CalciteTests.createMockRootSchema(conglomerate, walker, plannerConfig, AuthTestUtils.TEST_AUTHORIZER_MAPPER);
 
     sqlLifecycleFactory = CalciteTests.createSqlLifecycleFactory(
         new PlannerFactory(
-            druidSchema,
-            systemSchema,
+            rootSchema,
             CalciteTests.createMockQueryLifecycleFactory(walker, conglomerate),
             operatorTable,
             CalciteTests.createExprMacroTable(),
             plannerConfig,
             AuthTestUtils.TEST_AUTHORIZER_MAPPER,
-            CalciteTests.getJsonMapper()
+            CalciteTests.getJsonMapper(),
+            CalciteTests.DRUID_SCHEMA_NAME
         )
     );
   }
@@ -201,7 +200,7 @@ public class VarianceSqlAggregatorTest
     if (raw != null) {
       if (raw instanceof Double) {
         double v = ((Double) raw).doubleValue() * multiply;
-        holder.add((float) v);
+        holder.add(v);
       } else if (raw instanceof Float) {
         float v = ((Float) raw).floatValue() * multiply;
         holder.add(v);
@@ -230,7 +229,12 @@ public class VarianceSqlAggregatorTest
                        + "FROM numfoo";
 
     final List<Object[]> results =
-        sqlLifecycle.runSimple(sql, BaseCalciteQueryTest.QUERY_CONTEXT_DEFAULT, authenticationResult).toList();
+        sqlLifecycle.runSimple(
+            sql,
+            BaseCalciteQueryTest.QUERY_CONTEXT_DEFAULT,
+            CalciteTestBase.DEFAULT_PARAMETERS,
+            authenticationResult
+        ).toList();
 
     VarianceAggregatorCollector holder1 = new VarianceAggregatorCollector();
     VarianceAggregatorCollector holder2 = new VarianceAggregatorCollector();
@@ -263,7 +267,7 @@ public class VarianceSqlAggregatorTest
         .granularity(Granularities.ALL)
         .aggregators(
             ImmutableList.of(
-              new VarianceAggregatorFactory("a0:agg", "d1", "population", "float"),
+              new VarianceAggregatorFactory("a0:agg", "d1", "population", "double"),
               new VarianceAggregatorFactory("a1:agg", "f1", "population", "float"),
               new VarianceAggregatorFactory("a2:agg", "l1", "population", "long")
             )
@@ -285,7 +289,12 @@ public class VarianceSqlAggregatorTest
                        + "FROM numfoo";
 
     final List<Object[]> results =
-        sqlLifecycle.runSimple(sql, BaseCalciteQueryTest.QUERY_CONTEXT_DEFAULT, authenticationResult).toList();
+        sqlLifecycle.runSimple(
+            sql,
+            BaseCalciteQueryTest.QUERY_CONTEXT_DEFAULT,
+            CalciteTestBase.DEFAULT_PARAMETERS,
+            authenticationResult
+        ).toList();
 
     VarianceAggregatorCollector holder1 = new VarianceAggregatorCollector();
     VarianceAggregatorCollector holder2 = new VarianceAggregatorCollector();
@@ -318,7 +327,7 @@ public class VarianceSqlAggregatorTest
         .granularity(Granularities.ALL)
         .aggregators(
             ImmutableList.of(
-              new VarianceAggregatorFactory("a0:agg", "d1", "sample", "float"),
+              new VarianceAggregatorFactory("a0:agg", "d1", "sample", "double"),
               new VarianceAggregatorFactory("a1:agg", "f1", "sample", "float"),
               new VarianceAggregatorFactory("a2:agg", "l1", "sample", "long")
             )
@@ -340,7 +349,12 @@ public class VarianceSqlAggregatorTest
                        + "FROM numfoo";
 
     final List<Object[]> results =
-        sqlLifecycle.runSimple(sql, BaseCalciteQueryTest.QUERY_CONTEXT_DEFAULT, authenticationResult).toList();
+        sqlLifecycle.runSimple(
+            sql,
+            BaseCalciteQueryTest.QUERY_CONTEXT_DEFAULT,
+            CalciteTestBase.DEFAULT_PARAMETERS,
+            authenticationResult
+        ).toList();
 
     VarianceAggregatorCollector holder1 = new VarianceAggregatorCollector();
     VarianceAggregatorCollector holder2 = new VarianceAggregatorCollector();
@@ -373,7 +387,7 @@ public class VarianceSqlAggregatorTest
         .granularity(Granularities.ALL)
         .aggregators(
             ImmutableList.of(
-              new VarianceAggregatorFactory("a0:agg", "d1", "population", "float"),
+              new VarianceAggregatorFactory("a0:agg", "d1", "population", "double"),
               new VarianceAggregatorFactory("a1:agg", "f1", "population", "float"),
               new VarianceAggregatorFactory("a2:agg", "l1", "population", "long")
             )
@@ -402,7 +416,12 @@ public class VarianceSqlAggregatorTest
                        + "FROM numfoo";
 
     final List<Object[]> results =
-        sqlLifecycle.runSimple(sql, BaseCalciteQueryTest.QUERY_CONTEXT_DEFAULT, authenticationResult).toList();
+        sqlLifecycle.runSimple(
+            sql,
+            BaseCalciteQueryTest.QUERY_CONTEXT_DEFAULT,
+            CalciteTestBase.DEFAULT_PARAMETERS,
+            authenticationResult
+        ).toList();
 
     VarianceAggregatorCollector holder1 = new VarianceAggregatorCollector();
     VarianceAggregatorCollector holder2 = new VarianceAggregatorCollector();
@@ -435,7 +454,7 @@ public class VarianceSqlAggregatorTest
               .granularity(Granularities.ALL)
               .aggregators(
                   ImmutableList.of(
-                    new VarianceAggregatorFactory("a0:agg", "d1", "sample", "float"),
+                    new VarianceAggregatorFactory("a0:agg", "d1", "sample", "double"),
                     new VarianceAggregatorFactory("a1:agg", "f1", "sample", "float"),
                     new VarianceAggregatorFactory("a2:agg", "l1", "sample", "long")
                   )
@@ -463,7 +482,12 @@ public class VarianceSqlAggregatorTest
                        + "FROM numfoo";
 
     final List<Object[]> results =
-        sqlLifecycle.runSimple(sql, BaseCalciteQueryTest.QUERY_CONTEXT_DEFAULT, authenticationResult).toList();
+        sqlLifecycle.runSimple(
+            sql,
+            BaseCalciteQueryTest.QUERY_CONTEXT_DEFAULT,
+            CalciteTestBase.DEFAULT_PARAMETERS,
+            authenticationResult
+        ).toList();
 
     VarianceAggregatorCollector holder1 = new VarianceAggregatorCollector();
     VarianceAggregatorCollector holder2 = new VarianceAggregatorCollector();
@@ -501,7 +525,7 @@ public class VarianceSqlAggregatorTest
               )
               .aggregators(
                   ImmutableList.of(
-                    new VarianceAggregatorFactory("a0:agg", "v0", "sample", "float"),
+                    new VarianceAggregatorFactory("a0:agg", "v0", "sample", "double"),
                     new VarianceAggregatorFactory("a1:agg", "v1", "sample", "float"),
                     new VarianceAggregatorFactory("a2:agg", "v2", "sample", "long")
                   )

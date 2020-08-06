@@ -19,7 +19,7 @@
 const replace = require('replace-in-file');
 
 if (process.argv.length !== 4) {
-  console.log('Usage: node fix-path.js latest 0.16.0-incubating');
+  console.log('Usage: node fix-path.js latest 0.17.0');
   process.exit(1);
 }
 
@@ -58,6 +58,13 @@ try {
     from: /<meta name="docsearch:language"[^>]+\/>/g,
     to: (match, fullText) => {
       return match + `<meta name="docsearch:version" content="${druidVersion}" />`;
+    },
+  });
+  replace.sync({
+    files: './build/ApacheDruid/docs/**/*.html',
+    from: /"version:druidVersion"/g,
+    to: (match, fullText) => {
+      return `"version:${druidVersion}"`;
     },
   });
 

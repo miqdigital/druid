@@ -38,10 +38,12 @@ import org.apache.druid.client.indexing.HttpIndexingServiceClient;
 import org.apache.druid.client.indexing.IndexingService;
 import org.apache.druid.client.indexing.IndexingServiceClient;
 import org.apache.druid.client.indexing.IndexingServiceSelectorConfig;
-import org.apache.druid.discovery.NodeType;
+import org.apache.druid.discovery.NodeRole;
 import org.apache.druid.guice.IndexingServiceFirehoseModule;
+import org.apache.druid.guice.IndexingServiceInputSourceModule;
 import org.apache.druid.guice.IndexingServiceModuleHelper;
 import org.apache.druid.guice.IndexingServiceTaskLogsModule;
+import org.apache.druid.guice.IndexingServiceTuningConfigModule;
 import org.apache.druid.guice.JacksonConfigProvider;
 import org.apache.druid.guice.Jerseys;
 import org.apache.druid.guice.JsonConfigProvider;
@@ -61,6 +63,7 @@ import org.apache.druid.indexing.common.stats.DropwizardRowIngestionMetersFactor
 import org.apache.druid.indexing.common.stats.RowIngestionMetersFactory;
 import org.apache.druid.indexing.common.task.IndexTaskClientFactory;
 import org.apache.druid.indexing.common.task.batch.parallel.ParallelIndexSupervisorTaskClient;
+import org.apache.druid.indexing.common.task.batch.parallel.ShuffleClient;
 import org.apache.druid.indexing.common.tasklogs.SwitchingTaskLogStreamer;
 import org.apache.druid.indexing.common.tasklogs.TaskRunnerTaskLogStreamer;
 import org.apache.druid.indexing.overlord.ForkingTaskRunnerFactory;
@@ -95,6 +98,7 @@ import org.apache.druid.indexing.overlord.supervisor.SupervisorModule;
 import org.apache.druid.indexing.overlord.supervisor.SupervisorResource;
 import org.apache.druid.indexing.worker.config.WorkerConfig;
 import org.apache.druid.java.util.common.logger.Logger;
+import org.apache.druid.metadata.input.InputSourceModule;
 import org.apache.druid.query.lookup.LookupSerdeModule;
 import org.apache.druid.segment.realtime.appenderator.AppenderatorsManager;
 import org.apache.druid.segment.realtime.appenderator.DummyForInjectionAppenderatorsManager;
@@ -103,6 +107,7 @@ import org.apache.druid.server.audit.AuditManagerProvider;
 import org.apache.druid.server.coordinator.CoordinatorOverlordServiceConfig;
 import org.apache.druid.server.http.RedirectFilter;
 import org.apache.druid.server.http.RedirectInfo;
+import org.apache.druid.server.http.SelfDiscoveryResource;
 import org.apache.druid.server.initialization.ServerConfig;
 import org.apache.druid.server.initialization.jetty.JettyServerInitUtils;
 import org.apache.druid.server.initialization.jetty.JettyServerInitializer;
@@ -120,8 +125,6 @@ import org.eclipse.jetty.servlet.DefaultServlet;
 import org.eclipse.jetty.servlet.FilterHolder;
 import org.eclipse.jetty.servlet.ServletContextHandler;
 import org.eclipse.jetty.servlet.ServletHolder;
-import org.eclipse.jetty.util.resource.Resource;
-import org.eclipse.jetty.util.resource.ResourceCollection;
 
 import java.util.List;
 
@@ -136,12 +139,6 @@ public class CliOverlord extends ServerRunnable
   private static Logger log = new Logger(CliOverlord.class);
 
   protected static final List<String> UNSECURED_PATHS = ImmutableList.of(
-      "/",
-      "/favicon.png",
-      "/console.html",
-      "/old-console/*",
-      "/images/*",
-      "/js/*",
       "/druid/indexer/v1/isLeader",
       "/status/health"
   );
@@ -205,8 +202,8 @@ public class CliOverlord extends ServerRunnable
             binder.bind(IndexingServiceClient.class).to(HttpIndexingServiceClient.class).in(LazySingleton.class);
             binder.bind(new TypeLiteral<IndexTaskClientFactory<ParallelIndexSupervisorTaskClient>>()
             {
-            })
-                  .toProvider(Providers.of(null));
+            }).toProvider(Providers.of(null));
+            binder.bind(ShuffleClient.class).toProvider(Providers.of(null));
             binder.bind(ChatHandlerProvider.class).toProvider(Providers.of(null));
 
             PolyBind.createChoice(
@@ -253,11 +250,14 @@ public class CliOverlord extends ServerRunnable
               LifecycleModule.register(binder, Server.class);
             }
 
-            bindAnnouncer(
+            bindNodeRoleAndAnnouncer(
                 binder,
                 IndexingService.class,
-                DiscoverySideEffectsProvider.builder(NodeType.OVERLORD).build()
+                DiscoverySideEffectsProvider.builder(NodeRole.OVERLORD).build()
             );
+
+            Jerseys.addResource(binder, SelfDiscoveryResource.class);
+            LifecycleModule.registerKey(binder, Key.get(SelfDiscoveryResource.class));
           }
 
           private void configureTaskStorage(Binder binder)
@@ -345,7 +345,10 @@ public class CliOverlord extends ServerRunnable
           }
         },
         new IndexingServiceFirehoseModule(),
+        new IndexingServiceInputSourceModule(),
         new IndexingServiceTaskLogsModule(),
+        new IndexingServiceTuningConfigModule(),
+        new InputSourceModule(),
         new SupervisorModule(),
         new LookupSerdeModule(),
         new SamplerModule()
@@ -371,17 +374,10 @@ public class CliOverlord extends ServerRunnable
     {
       final ServletContextHandler root = new ServletContextHandler(ServletContextHandler.SESSIONS);
       root.setInitParameter("org.eclipse.jetty.servlet.Default.dirAllowed", "false");
-      root.setInitParameter("org.eclipse.jetty.servlet.Default.redirectWelcome", "true");
-      root.setWelcomeFiles(new String[]{"console.html"});
 
       ServletHolder holderPwd = new ServletHolder("default", DefaultServlet.class);
 
       root.addServlet(holderPwd, "/");
-      root.setBaseResource(
-          new ResourceCollection(
-              Resource.newClassPathResource("org/apache/druid/console")
-          )
-      );
 
       final ObjectMapper jsonMapper = injector.getInstance(Key.get(ObjectMapper.class, Json.class));
       final AuthenticatorMapper authenticatorMapper = injector.getInstance(AuthenticatorMapper.class);
@@ -390,12 +386,14 @@ public class CliOverlord extends ServerRunnable
 
       // perform no-op authorization/authentication for these resources
       AuthenticationUtils.addNoopAuthenticationAndAuthorizationFilters(root, UNSECURED_PATHS);
+      WebConsoleJettyServerInitializer.intializeServerForWebConsoleRoot(root);
       AuthenticationUtils.addNoopAuthenticationAndAuthorizationFilters(root, authConfig.getUnsecuredPaths());
 
       final List<Authenticator> authenticators = authenticatorMapper.getAuthenticatorChain();
       AuthenticationUtils.addAuthenticationFilterChain(root, authenticators);
 
       AuthenticationUtils.addAllowOptionsFilter(root, authConfig.isAllowUnauthenticatedHttpOptions());
+      JettyServerInitUtils.addAllowHttpMethodsFilter(root, serverConfig.getAllowedHttpMethods());
 
       JettyServerInitUtils.addExtensionFilters(root, injector);
 
@@ -422,6 +420,7 @@ public class CliOverlord extends ServerRunnable
       HandlerList handlerList = new HandlerList();
       handlerList.setHandlers(
           new Handler[]{
+              WebConsoleJettyServerInitializer.createWebConsoleRewriteHandler(),
               JettyServerInitUtils.getJettyRequestLogHandler(),
               JettyServerInitUtils.wrapWithDefaultGzipHandler(
                   root,

@@ -69,7 +69,7 @@ public class KafkaIndexTask extends SeekableStreamIndexTask<Integer, Long>
   )
   {
     super(
-        id == null ? getFormattedId(dataSchema.getDataSource(), TYPE) : id,
+        getOrMakeId(id, dataSchema.getDataSource(), TYPE),
         taskResource,
         dataSchema,
         tuningConfig,
@@ -190,5 +190,11 @@ public class KafkaIndexTask extends SeekableStreamIndexTask<Integer, Long>
   public String getType()
   {
     return TYPE;
+  }
+
+  @Override
+  public boolean supportsQueries()
+  {
+    return true;
   }
 }

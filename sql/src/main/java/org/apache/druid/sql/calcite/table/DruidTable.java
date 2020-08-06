@@ -33,19 +33,28 @@ import org.apache.calcite.schema.TranslatableTable;
 import org.apache.calcite.sql.SqlCall;
 import org.apache.calcite.sql.SqlNode;
 import org.apache.druid.query.DataSource;
+import org.apache.druid.segment.column.RowSignature;
+
+import java.util.Objects;
 
 public class DruidTable implements TranslatableTable
 {
   private final DataSource dataSource;
   private final RowSignature rowSignature;
+  private final boolean joinable;
+  private final boolean broadcast;
 
   public DruidTable(
       final DataSource dataSource,
-      final RowSignature rowSignature
+      final RowSignature rowSignature,
+      final boolean isJoinable,
+      final boolean isBroadcast
   )
   {
     this.dataSource = Preconditions.checkNotNull(dataSource, "dataSource");
     this.rowSignature = Preconditions.checkNotNull(rowSignature, "rowSignature");
+    this.joinable = isJoinable;
+    this.broadcast = isBroadcast;
   }
 
   public DataSource getDataSource()
@@ -56,6 +65,16 @@ public class DruidTable implements TranslatableTable
   public RowSignature getRowSignature()
   {
     return rowSignature;
+  }
+
+  public boolean isJoinable()
+  {
+    return joinable;
+  }
+
+  public boolean isBroadcast()
+  {
+    return broadcast;
   }
 
   @Override
@@ -73,7 +92,7 @@ public class DruidTable implements TranslatableTable
   @Override
   public RelDataType getRowType(final RelDataTypeFactory typeFactory)
   {
-    return rowSignature.getRelDataType(typeFactory);
+    return RowSignatures.toRelDataType(rowSignature, typeFactory);
   }
 
   @Override
@@ -111,10 +130,10 @@ public class DruidTable implements TranslatableTable
 
     DruidTable that = (DruidTable) o;
 
-    if (dataSource != null ? !dataSource.equals(that.dataSource) : that.dataSource != null) {
+    if (!Objects.equals(dataSource, that.dataSource)) {
       return false;
     }
-    return rowSignature != null ? rowSignature.equals(that.rowSignature) : that.rowSignature == null;
+    return Objects.equals(rowSignature, that.rowSignature);
   }
 
   @Override

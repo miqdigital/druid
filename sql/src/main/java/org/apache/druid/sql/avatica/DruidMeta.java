@@ -49,6 +49,7 @@ import org.joda.time.Interval;
 
 import javax.annotation.Nonnull;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -187,13 +188,13 @@ public class DruidMeta extends MetaImpl
     if (authenticationResult == null) {
       throw new ForbiddenException("Authentication failed.");
     }
-    final Signature signature = druidStatement.prepare(sql, maxRowCount, authenticationResult).getSignature();
-    final Frame firstFrame = druidStatement.execute()
+    druidStatement.prepare(sql, maxRowCount, authenticationResult);
+    final Frame firstFrame = druidStatement.execute(Collections.emptyList())
                                            .nextFrame(
                                                DruidStatement.START_OFFSET,
                                                getEffectiveMaxRowsPerFrame(maxRowsInFirstFrame)
                                            );
-
+    final Signature signature = druidStatement.getSignature();
     return new ExecuteResult(
         ImmutableList.of(
             MetaResultSet.create(
@@ -256,16 +257,14 @@ public class DruidMeta extends MetaImpl
       final int maxRowsInFirstFrame
   ) throws NoSuchStatementException
   {
-    Preconditions.checkArgument(parameterValues.isEmpty(), "Expected parameterValues to be empty");
-
     final DruidStatement druidStatement = getDruidStatement(statement);
-    final Signature signature = druidStatement.getSignature();
-    final Frame firstFrame = druidStatement.execute()
+    final Frame firstFrame = druidStatement.execute(parameterValues)
                                            .nextFrame(
                                                DruidStatement.START_OFFSET,
                                                getEffectiveMaxRowsPerFrame(maxRowsInFirstFrame)
                                            );
 
+    final Signature signature = druidStatement.getSignature();
     return new ExecuteResult(
         ImmutableList.of(
             MetaResultSet.create(
@@ -365,7 +364,7 @@ public class DruidMeta extends MetaImpl
     }
 
     if (schemaPattern.s != null) {
-      whereBuilder.add("SCHEMATA.SCHEMA_NAME LIKE " + Calcites.escapeStringLiteral(schemaPattern.s));
+      whereBuilder.add("SCHEMATA.SCHEMA_NAME LIKE " + withEscapeClause(schemaPattern.s));
     }
 
     final String where = whereBuilder.isEmpty() ? "" : "WHERE " + Joiner.on(" AND ").join(whereBuilder);
@@ -396,11 +395,11 @@ public class DruidMeta extends MetaImpl
     }
 
     if (schemaPattern.s != null) {
-      whereBuilder.add("TABLES.TABLE_SCHEMA LIKE " + Calcites.escapeStringLiteral(schemaPattern.s));
+      whereBuilder.add("TABLES.TABLE_SCHEMA LIKE " + withEscapeClause(schemaPattern.s));
     }
 
     if (tableNamePattern.s != null) {
-      whereBuilder.add("TABLES.TABLE_NAME LIKE " + Calcites.escapeStringLiteral(tableNamePattern.s));
+      whereBuilder.add("TABLES.TABLE_NAME LIKE " + withEscapeClause(tableNamePattern.s));
     }
 
     if (typeList != null) {
@@ -447,15 +446,16 @@ public class DruidMeta extends MetaImpl
     }
 
     if (schemaPattern.s != null) {
-      whereBuilder.add("COLUMNS.TABLE_SCHEMA LIKE " + Calcites.escapeStringLiteral(schemaPattern.s));
+      whereBuilder.add("COLUMNS.TABLE_SCHEMA LIKE " + withEscapeClause(schemaPattern.s));
     }
 
     if (tableNamePattern.s != null) {
-      whereBuilder.add("COLUMNS.TABLE_NAME LIKE " + Calcites.escapeStringLiteral(tableNamePattern.s));
+      whereBuilder.add("COLUMNS.TABLE_NAME LIKE " + withEscapeClause(tableNamePattern.s));
     }
 
     if (columnNamePattern.s != null) {
-      whereBuilder.add("COLUMNS.COLUMN_NAME LIKE " + Calcites.escapeStringLiteral(columnNamePattern.s));
+      whereBuilder.add("COLUMNS.COLUMN_NAME LIKE "
+                       + withEscapeClause(columnNamePattern.s));
     }
 
     final String where = whereBuilder.isEmpty() ? "" : "WHERE " + Joiner.on(" AND ").join(whereBuilder);
@@ -638,5 +638,10 @@ public class DruidMeta extends MetaImpl
       return config.getMaxRowsPerFrame();
     }
     return Math.min(clientMaxRowsPerFrame, config.getMaxRowsPerFrame());
+  }
+
+  private static String withEscapeClause(String toEscape)
+  {
+    return Calcites.escapeStringLiteral(toEscape) + " ESCAPE '\\'";
   }
 }

@@ -30,6 +30,7 @@ import org.apache.druid.query.lookup.LookupExtractor;
 import org.apache.druid.server.lookup.cache.polling.OffHeapPollingCache;
 import org.apache.druid.server.lookup.cache.polling.OnHeapPollingCache;
 import org.apache.druid.server.lookup.cache.polling.PollingCacheFactory;
+import org.apache.druid.testing.InitializedNullHandlingTest;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -45,7 +46,7 @@ import java.util.List;
 import java.util.Map;
 
 @RunWith(Parameterized.class)
-public class PollingLookupTest
+public class PollingLookupTest extends InitializedNullHandlingTest
 {
   private static final Map<String, String> FIRST_LOOKUP_MAP = ImmutableMap.of(
       "foo", "bar",
@@ -176,7 +177,7 @@ public class PollingLookupTest
     );
     Assert.assertEquals(
         "reverse lookup of none existing value should be empty list",
-        Collections.EMPTY_LIST,
+        Collections.emptyList(),
         pollingLookup.unapply("does't exist")
     );
   }

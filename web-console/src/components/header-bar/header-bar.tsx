@@ -32,30 +32,27 @@ import {
 import { IconNames } from '@blueprintjs/icons';
 import React, { useState } from 'react';
 
-import { AboutDialog } from '../../dialogs/about-dialog/about-dialog';
-import { CoordinatorDynamicConfigDialog } from '../../dialogs/coordinator-dynamic-config-dialog/coordinator-dynamic-config-dialog';
-import { DoctorDialog } from '../../dialogs/doctor-dialog/doctor-dialog';
-import { OverlordDynamicConfigDialog } from '../../dialogs/overlord-dynamic-config-dialog/overlord-dynamic-config-dialog';
-import { Capabilities } from '../../utils/capabilities';
 import {
-  DRUID_ASF_SLACK,
-  DRUID_DOCS,
-  DRUID_GITHUB,
-  DRUID_USER_GROUP,
-  LEGACY_COORDINATOR_CONSOLE,
-  LEGACY_OVERLORD_CONSOLE,
-} from '../../variables';
+  AboutDialog,
+  CoordinatorDynamicConfigDialog,
+  DoctorDialog,
+  OverlordDynamicConfigDialog,
+} from '../../dialogs';
+import { getLink } from '../../links';
+import { Capabilities } from '../../utils/capabilities';
+import { ExternalLink } from '../external-link/external-link';
+import { PopoverText } from '../popover-text/popover-text';
 
 import './header-bar.scss';
 
 export type HeaderActiveTab =
   | null
   | 'load-data'
-  | 'query'
+  | 'ingestion'
   | 'datasources'
   | 'segments'
-  | 'tasks'
   | 'services'
+  | 'query'
   | 'lookups';
 
 const DruidLogo = React.memo(function DruidLogo() {
@@ -115,41 +112,115 @@ const DruidLogo = React.memo(function DruidLogo() {
   );
 });
 
-interface LegacyMenuProps {
+interface RestrictedModeProps {
   capabilities: Capabilities;
 }
 
-const LegacyMenu = React.memo(function LegacyMenu(props: LegacyMenuProps) {
+const RestrictedMode = React.memo(function RestrictedMode(props: RestrictedModeProps) {
   const { capabilities } = props;
+  const mode = capabilities.getModeExtended();
+
+  let label: string;
+  let message: JSX.Element;
+  switch (mode) {
+    case 'full':
+      return null; // Do not show anything
+
+    case 'no-sql':
+      label = 'No SQL mode';
+      message = (
+        <p>
+          It appears that the SQL endpoint is disabled. The console will fall back to{' '}
+          <ExternalLink href={getLink('DOCS_API')}>native Druid APIs</ExternalLink> and will be
+          limited in functionality. Look at{' '}
+          <ExternalLink href={getLink('DOCS_SQL')}>the SQL docs</ExternalLink> to enable the SQL
+          endpoint.
+        </p>
+      );
+      break;
+
+    case 'no-proxy':
+      label = 'No management proxy mode';
+      message = (
+        <p>
+          It appears that the management proxy is not enabled, the console will operate with limited
+          functionality.
+        </p>
+      );
+      break;
+
+    case 'no-sql-no-proxy':
+      label = 'No SQL mode';
+      message = (
+        <p>
+          It appears that the SQL endpoint and management proxy are disabled. The console can only
+          be used to make queries.
+        </p>
+      );
+      break;
+
+    case 'coordinator':
+      label = 'Coordinator mode';
+      message = (
+        <p>
+          It appears that you are accessing the console on the Coordinator service. Due to the lack
+          of access to some APIs on this service the console will operate in a limited mode. The
+          full version of the console can be accessed on the Router service.
+        </p>
+      );
+      break;
+
+    case 'overlord':
+      label = 'Overlord mode';
+      message = (
+        <p>
+          It appears that you are accessing the console on the Overlord service. Due to the lack of
+          access to some APIs on this service the console will operate in a limited mode. The full
+          version of the console can be accessed on the Router service.
+        </p>
+      );
+      break;
+
+    default:
+      label = 'Restricted mode';
+      message = (
+        <p>
+          Due to the lack of access to some APIs on this service the console will operate in a
+          limited mode. The full version of the console can be accessed on the Router service.
+        </p>
+      );
+      break;
+  }
 
   return (
-    <Menu>
-      <MenuItem
-        icon={IconNames.GRAPH}
-        text="Legacy coordinator console"
-        href={LEGACY_COORDINATOR_CONSOLE}
-        target="_blank"
-        disabled={!capabilities.hasCoordinatorAccess()}
-      />
-      <MenuItem
-        icon={IconNames.MAP}
-        text="Legacy overlord console"
-        href={LEGACY_OVERLORD_CONSOLE}
-        target="_blank"
-        disabled={!capabilities.hasOverlordAccess()}
-      />
-    </Menu>
+    <Popover
+      content={
+        <PopoverText>
+          <p>The console is running in restricted mode.</p>
+          {message}
+          <p>
+            For more info check out the{' '}
+            <ExternalLink href={`${getLink('DOCS')}/operations/management-uis.html#druid-console`}>
+              console documentation
+            </ExternalLink>
+            .
+          </p>
+        </PopoverText>
+      }
+      position={Position.BOTTOM_RIGHT}
+    >
+      <Button icon={IconNames.WARNING_SIGN} text={label} intent={Intent.WARNING} minimal />
+    </Popover>
   );
 });
 
 export interface HeaderBarProps {
   active: HeaderActiveTab;
-  hideLegacy: boolean;
   capabilities: Capabilities;
 }
 
 export const HeaderBar = React.memo(function HeaderBar(props: HeaderBarProps) {
-  const { active, hideLegacy, capabilities } = props;
+  const { active, capabilities } = props;
   const [aboutDialogOpen, setAboutDialogOpen] = useState(false);
   const [doctorDialogOpen, setDoctorDialogOpen] = useState(false);
   const [coordinatorDynamicConfigDialogOpen, setCoordinatorDynamicConfigDialogOpen] = useState(
@@ -161,15 +232,25 @@ export const HeaderBar = React.memo(function HeaderBar(props: HeaderBarProps) {
   const helpMenu = (
     <Menu>
       <MenuItem icon={IconNames.GRAPH} text="About" onClick={() => setAboutDialogOpen(true)} />
-      <MenuItem icon={IconNames.TH} text="Docs" href={DRUID_DOCS} target="_blank" />
-      <MenuItem icon={IconNames.USER} text="User group" href={DRUID_USER_GROUP} target="_blank" />
+      <MenuItem icon={IconNames.TH} text="Docs" href={getLink('DOCS')} target="_blank" />
+      <MenuItem
+        icon={IconNames.USER}
+        text="User group"
+        href={getLink('USER_GROUP')}
+        target="_blank"
+      />
       <MenuItem
         icon={IconNames.CHAT}
         text="ASF Slack channel"
-        href={DRUID_ASF_SLACK}
+        href={getLink('SLACK')}
         target="_blank"
       />
-      <MenuItem icon={IconNames.GIT_BRANCH} text="GitHub" href={DRUID_GITHUB} target="_blank" />
+      <MenuItem
+        icon={IconNames.GIT_BRANCH}
+        text="GitHub"
+        href={getLink('GITHUB')}
+        target="_blank"
+      />
     </Menu>
   );
 
@@ -224,10 +305,19 @@ export const HeaderBar = React.memo(function HeaderBar(props: HeaderBarProps) {
         <NavbarDivider />
         <AnchorButton
           minimal
+          active={active === 'ingestion'}
+          icon={IconNames.GANTT_CHART}
+          text="Ingestion"
+          href="#ingestion"
+          disabled={!capabilities.hasSqlOrOverlordAccess()}
+        />
+        <AnchorButton
+          minimal
           active={active === 'datasources'}
           icon={IconNames.MULTI_SELECT}
           text="Datasources"
           href="#datasources"
+          disabled={!capabilities.hasSqlOrCoordinatorAccess()}
         />
         <AnchorButton
           minimal
@@ -235,13 +325,7 @@ export const HeaderBar = React.memo(function HeaderBar(props: HeaderBarProps) {
           icon={IconNames.STACKED_CHART}
           text="Segments"
           href="#segments"
-        />
-        <AnchorButton
-          minimal
-          active={active === 'tasks'}
-          icon={IconNames.GANTT_CHART}
-          text="Tasks"
-          href="#tasks"
+          disabled={!capabilities.hasSqlOrCoordinatorAccess()}
         />
         <AnchorButton
           minimal
@@ -249,6 +333,7 @@ export const HeaderBar = React.memo(function HeaderBar(props: HeaderBarProps) {
           icon={IconNames.DATABASE}
           text="Services"
           href="#services"
+          disabled={!capabilities.hasSqlOrCoordinatorAccess()}
         />
 
         <NavbarDivider />
@@ -262,14 +347,7 @@ export const HeaderBar = React.memo(function HeaderBar(props: HeaderBarProps) {
         />
       </NavbarGroup>
       <NavbarGroup align={Alignment.RIGHT}>
-        {!hideLegacy && (
-          <Popover
-            content={<LegacyMenu capabilities={capabilities} />}
-            position={Position.BOTTOM_RIGHT}
-          >
-            <Button minimal icon={IconNames.SHARE} text="Legacy" />
-          </Popover>
-        )}
+        <RestrictedMode capabilities={capabilities} />
         <Popover content={configMenu} position={Position.BOTTOM_RIGHT}>
           <Button minimal icon={IconNames.COG} />
         </Popover>

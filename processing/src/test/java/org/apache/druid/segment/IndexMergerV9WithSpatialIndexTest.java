@@ -21,13 +21,13 @@ package org.apache.druid.segment;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
-import org.apache.commons.io.FileUtils;
 import org.apache.druid.collections.spatial.search.RadiusBound;
 import org.apache.druid.collections.spatial.search.RectangularBound;
 import org.apache.druid.data.input.MapBasedInputRow;
 import org.apache.druid.data.input.impl.DimensionsSpec;
 import org.apache.druid.data.input.impl.SpatialDimensionSchema;
 import org.apache.druid.java.util.common.DateTimes;
+import org.apache.druid.java.util.common.FileUtils;
 import org.apache.druid.java.util.common.Intervals;
 import org.apache.druid.java.util.common.granularity.Granularities;
 import org.apache.druid.query.Druids;
@@ -48,6 +48,7 @@ import org.apache.druid.query.timeseries.TimeseriesResultValue;
 import org.apache.druid.segment.incremental.IncrementalIndex;
 import org.apache.druid.segment.incremental.IncrementalIndexSchema;
 import org.apache.druid.segment.writeout.SegmentWriteOutMediumFactory;
+import org.apache.druid.testing.InitializedNullHandlingTest;
 import org.joda.time.Interval;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -66,7 +67,7 @@ import java.util.concurrent.ThreadLocalRandom;
 /**
  */
 @RunWith(Parameterized.class)
-public class IndexMergerV9WithSpatialIndexTest
+public class IndexMergerV9WithSpatialIndexTest extends InitializedNullHandlingTest
 {
 
   public static final int NUM_POINTS = 5000;
@@ -571,9 +572,7 @@ public class IndexMergerV9WithSpatialIndexTest
     );
     try {
       TimeseriesQueryRunnerFactory factory = new TimeseriesQueryRunnerFactory(
-          new TimeseriesQueryQueryToolChest(
-              QueryRunnerTestHelper.noopIntervalChunkingQueryRunnerDecorator()
-          ),
+          new TimeseriesQueryQueryToolChest(),
           new TimeseriesQueryEngine(),
           QueryRunnerTestHelper.NOOP_QUERYWATCHER
       );
@@ -625,9 +624,7 @@ public class IndexMergerV9WithSpatialIndexTest
     );
     try {
       TimeseriesQueryRunnerFactory factory = new TimeseriesQueryRunnerFactory(
-          new TimeseriesQueryQueryToolChest(
-              QueryRunnerTestHelper.noopIntervalChunkingQueryRunnerDecorator()
-          ),
+          new TimeseriesQueryQueryToolChest(),
           new TimeseriesQueryEngine(),
           QueryRunnerTestHelper.NOOP_QUERYWATCHER
       );
@@ -714,9 +711,7 @@ public class IndexMergerV9WithSpatialIndexTest
     );
     try {
       TimeseriesQueryRunnerFactory factory = new TimeseriesQueryRunnerFactory(
-          new TimeseriesQueryQueryToolChest(
-              QueryRunnerTestHelper.noopIntervalChunkingQueryRunnerDecorator()
-          ),
+          new TimeseriesQueryQueryToolChest(),
           new TimeseriesQueryEngine(),
           QueryRunnerTestHelper.NOOP_QUERYWATCHER
       );

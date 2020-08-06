@@ -22,8 +22,12 @@ title: "Aggregations"
   ~ under the License.
   -->
 
+> Apache Druid supports two query languages: [Druid SQL](sql.md) and [native queries](querying.md).
+> This document describes the native
+> language. For information about aggregators available in SQL, refer to the
+> [SQL documentation](sql.md#aggregation-functions).
 
-Aggregations can be provided at ingestion time as part of the ingestion spec as a way of summarizing data before it enters Apache Druid (incubating).
+Aggregations can be provided at ingestion time as part of the ingestion spec as a way of summarizing data before it enters Apache Druid.
 Aggregations can also be specified as part of many queries at query time.
 
 Available aggregations are:
@@ -136,7 +140,7 @@ Note that queries with first/last aggregators on a segment created with rollup e
 
 #### `doubleFirst` aggregator
 
-`doubleFirst` computes the metric value with the minimum timestamp or 0 if no row exist
+`doubleFirst` computes the metric value with the minimum timestamp or 0 in default mode or `null` in SQL compatible mode if no row exist
 
 ```json
 {
@@ -148,7 +152,7 @@ Note that queries with first/last aggregators on a segment created with rollup e
 
 #### `doubleLast` aggregator
 
-`doubleLast` computes the metric value with the maximum timestamp or 0 if no row exist
+`doubleLast` computes the metric value with the maximum timestamp or 0 in default mode or `null` in SQL compatible mode if no row exist
 
 ```json
 {
@@ -160,7 +164,7 @@ Note that queries with first/last aggregators on a segment created with rollup e
 
 #### `floatFirst` aggregator
 
-`floatFirst` computes the metric value with the minimum timestamp or 0 if no row exist
+`floatFirst` computes the metric value with the minimum timestamp or 0 in default mode or `null` in SQL compatible mode if no row exist
 
 ```json
 {
@@ -172,7 +176,7 @@ Note that queries with first/last aggregators on a segment created with rollup e
 
 #### `floatLast` aggregator
 
-`floatLast` computes the metric value with the maximum timestamp or 0 if no row exist
+`floatLast` computes the metric value with the maximum timestamp or 0 in default mode or `null` in SQL compatible mode if no row exist
 
 ```json
 {
@@ -184,7 +188,7 @@ Note that queries with first/last aggregators on a segment created with rollup e
 
 #### `longFirst` aggregator
 
-`longFirst` computes the metric value with the minimum timestamp or 0 if no row exist
+`longFirst` computes the metric value with the minimum timestamp or 0 in default mode or `null` in SQL compatible mode if no row exist
 
 ```json
 {
@@ -196,7 +200,7 @@ Note that queries with first/last aggregators on a segment created with rollup e
 
 #### `longLast` aggregator
 
-`longLast` computes the metric value with the maximum timestamp or 0 if no row exist
+`longLast` computes the metric value with the maximum timestamp or 0 in default mode or `null` in SQL compatible mode if no row exist
 
 ```json
 {
@@ -215,8 +219,7 @@ Note that queries with first/last aggregators on a segment created with rollup e
   "type" : "stringFirst",
   "name" : <output_name>,
   "fieldName" : <metric_name>,
-  "maxStringBytes" : <integer> # (optional, defaults to 1024),
-  "filterNullValues" : <boolean> # (optional, defaults to false)
+  "maxStringBytes" : <integer> # (optional, defaults to 1024)
 }
 ```
 
@@ -231,8 +234,62 @@ Note that queries with first/last aggregators on a segment created with rollup e
   "type" : "stringLast",
   "name" : <output_name>,
   "fieldName" : <metric_name>,
+  "maxStringBytes" : <integer> # (optional, defaults to 1024)
+}
+```
+
+### ANY aggregator
+
+(Double/Float/Long/String) ANY aggregator cannot be used in ingestion spec, and should only be specified as part of queries.
+
+Returns any value including null. This aggregator can simplify and optimize the performance by returning the first encountered value (including null)
+
+#### `doubleAny` aggregator
+
+`doubleAny` returns any double metric value
+
+```json
+{
+  "type" : "doubleAny",
+  "name" : <output_name>,
+  "fieldName" : <metric_name>
+}
+```
+
+#### `floatAny` aggregator
+
+`floatAny` returns any float metric value
+
+```json
+{
+  "type" : "floatAny",
+  "name" : <output_name>,
+  "fieldName" : <metric_name>
+}
+```
+
+#### `longAny` aggregator
+
+`longAny` returns any long metric value
+
+```json
+{
+  "type" : "longAny",
+  "name" : <output_name>,
+  "fieldName" : <metric_name>,
+}
+```
+
+#### `stringAny` aggregator
+
+`stringAny` returns any string metric value
+
+```json
+{
+  "type" : "stringAny",
+  "name" : <output_name>,
+  "fieldName" : <metric_name>,
   "maxStringBytes" : <integer> # (optional, defaults to 1024),
-  "filterNullValues" : <boolean> # (optional, defaults to false)
 }
 ```
 
@@ -275,11 +332,11 @@ JavaScript functions are expected to return floating-point values.
 
 ### Count distinct
 
-#### DataSketches Theta Sketch
+#### Apache DataSketches Theta Sketch
 
-The [DataSketches Theta Sketch](../development/extensions-core/datasketches-theta.md) extension-provided aggregator gives distinct count estimates with support for set union, intersection, and difference post-aggregators, using Theta sketches from the [datasketches](https://datasketches.github.io/) library.
+The [DataSketches Theta Sketch](../development/extensions-core/datasketches-theta.md) extension-provided aggregator gives distinct count estimates with support for set union, intersection, and difference post-aggregators, using Theta sketches from the [Apache DataSketches](https://datasketches.apache.org/) library.
 
-#### DataSketches HLL Sketch
+#### Apache DataSketches HLL Sketch
 
 The [DataSketches HLL Sketch](../development/extensions-core/datasketches-hll.md) extension-provided aggregator gives distinct count estimates using the HyperLogLog algorithm.
 
@@ -292,7 +349,7 @@ Compared to the Theta sketch, the HLL sketch does not support set operations and
 
 The [Cardinality and HyperUnique](../querying/hll-old.md) aggregators are older aggregator implementations available by default in Druid that also provide distinct count estimates using the HyperLogLog algorithm. The newer DataSketches Theta and HLL extension-provided aggregators described above have superior accuracy and performance and are recommended instead.
 
-The DataSketches team has published a [comparison study](https://datasketches.github.io/docs/HLL/HllSketchVsDruidHyperLogLogCollector.html) between Druid's original HLL algorithm and the DataSketches HLL algorithm. Based on the demonstrated advantages of the DataSketches implementation, we are recommending using them in preference to Druid's original HLL-based aggregators.
+The DataSketches team has published a [comparison study](https://datasketches.apache.org/docs/HLL/HllSketchVsDruidHyperLogLogCollector.html) between Druid's original HLL algorithm and the DataSketches HLL algorithm. Based on the demonstrated advantages of the DataSketches implementation, we are recommending using them in preference to Druid's original HLL-based aggregators.
 However, to ensure backwards compatibility, we will continue to support the classic aggregators.
 
 Please note that `hyperUnique` aggregators are not mutually compatible with Datasketches HLL or Theta sketches.
@@ -308,7 +365,7 @@ Note the DataSketches Theta and HLL aggregators currently only support single-co
 
 #### DataSketches Quantiles Sketch
 
-The [DataSketches Quantiles Sketch](../development/extensions-core/datasketches-quantiles.md) extension-provided aggregator provides quantile estimates and histogram approximations using the numeric quantiles DoublesSketch from the [datasketches](https://datasketches.github.io/) library.
+The [DataSketches Quantiles Sketch](../development/extensions-core/datasketches-quantiles.md) extension-provided aggregator provides quantile estimates and histogram approximations using the numeric quantiles DoublesSketch from the [datasketches](https://datasketches.apache.org/) library.
 
 We recommend this aggregator in general for quantiles/histogram use cases, as it provides formal error bounds and has distribution-independent accuracy.
 
@@ -338,7 +395,7 @@ The [Approximate Histogram](../development/extensions-core/approximate-histogram
 
 The algorithm used by this deprecated aggregator is highly distribution-dependent and its output is subject to serious distortions when the input does not fit within the algorithm's limitations.
 
-A [study published by the DataSketches team](https://datasketches.github.io/docs/Quantiles/DruidApproxHistogramStudy.html) demonstrates some of the known failure modes of this algorithm:
+A [study published by the DataSketches team](https://datasketches.apache.org/docs/Quantiles/DruidApproxHistogramStudy.html) demonstrates some of the known failure modes of this algorithm:
 
 - The algorithm's quantile calculations can fail to provide results for a large range of rank values (all ranks less than 0.89 in the example used in the study), returning all zeroes instead.
 - The algorithm can completely fail to record spikes in the tail ends of the distribution

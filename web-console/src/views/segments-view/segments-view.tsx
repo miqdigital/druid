@@ -16,16 +16,7 @@
  * limitations under the License.
  */
 
-import {
-  Button,
-  ButtonGroup,
-  Intent,
-  Label,
-  Menu,
-  MenuItem,
-  Popover,
-  Position,
-} from '@blueprintjs/core';
+import { Button, ButtonGroup, Intent, Label, MenuItem } from '@blueprintjs/core';
 import { IconNames } from '@blueprintjs/icons';
 import axios from 'axios';
 import React from 'react';
@@ -37,6 +28,7 @@ import {
   ACTION_COLUMN_LABEL,
   ACTION_COLUMN_WIDTH,
   ActionCell,
+  MoreButton,
   RefreshButton,
   TableColumnSelector,
   ViewControlBar,
@@ -154,7 +146,6 @@ interface SegmentQueryResultRow {
   version: string;
   size: 0;
   partition_num: number;
-  payload: any;
   num_rows: number;
   num_replicas: number;
   is_available: number;
@@ -219,6 +210,7 @@ export class SegmentsView extends React.PureComponent<SegmentsViewProps, Segment
             `FROM sys.segments`,
             whereClause ? `WHERE ${whereClause}` : '',
             `GROUP BY 1`,
+            `ORDER BY 1 DESC`,
             `LIMIT ${totalQuerySize}`,
           ]).join('\n');
 
@@ -229,10 +221,10 @@ export class SegmentsView extends React.PureComponent<SegmentsViewProps, Segment
           queryParts = compact([
             `SELECT`,
             `  ("start" || '/' || "end") AS "interval",`,
-            `  "segment_id", "datasource", "start", "end", "size", "version", "partition_num", "num_replicas", "num_rows", "is_published", "is_available", "is_realtime", "is_overshadowed", "payload"`,
+            `  "segment_id", "datasource", "start", "end", "size", "version", "partition_num", "num_replicas", "num_rows", "is_published", "is_available", "is_realtime", "is_overshadowed"`,
             `FROM sys.segments`,
             `WHERE`,
-            `  ("start" || '/' || "end") IN (${intervals})`,
+            intervals ? `  ("start" || '/' || "end") IN (${intervals})` : 'FALSE',
             whereClause ? `  AND ${whereClause}` : '',
           ]);
 
@@ -248,7 +240,7 @@ export class SegmentsView extends React.PureComponent<SegmentsViewProps, Segment
           queryParts.push(`LIMIT ${totalQuerySize * 1000}`);
         } else {
           queryParts = [
-            `SELECT "segment_id", "datasource", "start", "end", "size", "version", "partition_num", "num_replicas", "num_rows", "is_published", "is_available", "is_realtime", "is_overshadowed", "payload"`,
+            `SELECT "segment_id", "datasource", "start", "end", "size", "version", "partition_num", "num_replicas", "num_rows", "is_published", "is_available", "is_realtime", "is_overshadowed"`,
             `FROM sys.segments`,
           ];
 
@@ -272,13 +264,6 @@ export class SegmentsView extends React.PureComponent<SegmentsViewProps, Segment
         const results: any[] = (await queryDruidSql({ query: sqlQuery })).slice(
           query.page * query.pageSize,
         );
-        results.forEach(result => {
-          try {
-            result.payload = JSON.parse(result.payload);
-          } catch {
-            result.payload = {};
-          }
-        });
         return results;
       },
       onStateChange: ({ result, loading, error }) => {
@@ -307,7 +292,6 @@ export class SegmentsView extends React.PureComponent<SegmentsViewProps, Segment
                 version: segment.version,
                 partition_num: segment.shardSpec.partitionNum ? 0 : segment.shardSpec.partitionNum,
                 size: segment.size,
-                payload: segment,
                 num_rows: -1,
                 num_replicas: -1,
                 is_available: -1,
@@ -319,16 +303,14 @@ export class SegmentsView extends React.PureComponent<SegmentsViewProps, Segment
           }),
         );
 
-        const results: SegmentQueryResultRow[] = nestedResults.flat().sort((d1: any, d2: any) => {
+        return nestedResults.flat().sort((d1: any, d2: any) => {
           return d2.start.localeCompare(d1.start);
         });
-
-        return results.slice(0, SegmentsView.PAGE_SIZE);
       },
       onStateChange: ({ result, loading, error }) => {
         this.setState({
           allSegments: result,
-          segments: result,
+          segments: result ? result.slice(0, SegmentsView.PAGE_SIZE) : undefined,
           segmentsLoading: loading,
           segmentsError: error,
         });
@@ -368,6 +350,11 @@ export class SegmentsView extends React.PureComponent<SegmentsViewProps, Segment
     const sortPivot = sorted[0].id;
     const sortDesc = sorted[0].desc;
     const selectedSegments = allSegments
+      .filter((d: any) => {
+        return filtered.every((f: any) => {
+          return d[f.id].includes(f.value);
+        });
+      })
       .sort((d1: any, d2: any) => {
         const v1 = d1[sortPivot];
         const v2 = d2[sortPivot];
@@ -377,14 +364,10 @@ export class SegmentsView extends React.PureComponent<SegmentsViewProps, Segment
           return sortDesc ? v2 - v1 : v1 - v2;
         }
       })
-      .filter((d: any) => {
-        return filtered.every((f: any) => {
-          return d[f.id].includes(f.value);
-        });
-      });
-    const segments = selectedSegments.slice(startPage, endPage);
+      .slice(startPage, endPage);
+
     this.setState({
-      segments,
+      segments: selectedSegments,
     });
   };
 
@@ -433,9 +416,7 @@ export class SegmentsView extends React.PureComponent<SegmentsViewProps, Segment
               filtered: state.filtered,
               sorted: state.sorted,
             });
-            if (this.segmentsSqlQueryManager.getLastQuery) {
-              this.fetchData(groupByInterval, state);
-            }
+            this.fetchData(groupByInterval, state);
           } else if (capabilities.hasCoordinatorAccess()) {
             this.fetchClientSideData(state);
           }
@@ -660,8 +641,8 @@ export class SegmentsView extends React.PureComponent<SegmentsViewProps, Segment
     const { goToQuery, capabilities } = this.props;
     const lastSegmentsQuery = this.segmentsSqlQueryManager.getLastIntermediateQuery();
 
-    const bulkSegmentsActionsMenu = (
-      <Menu>
+    return (
+      <MoreButton>
         {capabilities.hasSql() && (
           <MenuItem
             icon={IconNames.APPLICATION}
@@ -673,15 +654,7 @@ export class SegmentsView extends React.PureComponent<SegmentsViewProps, Segment
             }}
           />
         )}
-      </Menu>
-    );
-
-    return (
-      <>
-        <Popover content={bulkSegmentsActionsMenu} position={Position.BOTTOM_LEFT}>
-          <Button icon={IconNames.MORE} />
-        </Popover>
-      </>
+      </MoreButton>
     );
   }
 
@@ -701,9 +674,9 @@ export class SegmentsView extends React.PureComponent<SegmentsViewProps, Segment
           <ViewControlBar label="Segments">
             <RefreshButton
               onRefresh={auto =>
-                capabilities
-                  ? this.segmentsNoSqlQueryManager.rerunLastQuery(auto)
-                  : this.segmentsSqlQueryManager.rerunLastQuery(auto)
+                capabilities.hasSql()
+                  ? this.segmentsSqlQueryManager.rerunLastQuery(auto)
+                  : this.segmentsNoSqlQueryManager.rerunLastQuery(auto)
               }
               localStorageKey={LocalStorageKeys.SEGMENTS_REFRESH_RATE}
             />

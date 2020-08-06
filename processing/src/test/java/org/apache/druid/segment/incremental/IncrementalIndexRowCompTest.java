@@ -22,6 +22,7 @@ package org.apache.druid.segment.incremental;
 import com.google.common.collect.Lists;
 import org.apache.druid.data.input.MapBasedInputRow;
 import org.apache.druid.query.aggregation.CountAggregatorFactory;
+import org.apache.druid.testing.InitializedNullHandlingTest;
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -32,7 +33,7 @@ import java.util.Map;
 
 /**
  */
-public class IncrementalIndexRowCompTest
+public class IncrementalIndexRowCompTest extends InitializedNullHandlingTest
 {
   @Test
   public void testBasic()
@@ -70,8 +71,8 @@ public class IncrementalIndexRowCompTest
 
     Assert.assertTrue(comparator.compare(ir4, ir6) > 0);
     Assert.assertTrue(comparator.compare(ir5, ir6) > 0);
-    Assert.assertTrue(comparator.compare(ir4, ir5) < 0);
-    Assert.assertTrue(comparator.compare(ir5, ir4) > 0);
+    Assert.assertTrue(comparator.compare(ir5, ir4) < 0);
+    Assert.assertTrue(comparator.compare(ir4, ir5) > 0);
   }
 
   private MapBasedInputRow toMapRow(long time, Object... dimAndVal)

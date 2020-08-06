@@ -21,6 +21,7 @@ package org.apache.druid.java.util.common;
 
 import com.google.common.base.Strings;
 
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
@@ -112,7 +113,7 @@ public class StringUtils
 
   /**
    * Encodes "string" into the buffer "byteBuffer", using no more than the number of bytes remaining in the buffer.
-   * Will only encode whole characters. The byteBuffer's position and limit be changed during operation, but will
+   * Will only encode whole characters. The byteBuffer's position and limit may be changed during operation, but will
    * be reset before this method call ends.
    *
    * @return the number of bytes written, which may be shorter than the full encoded string length if there
@@ -235,6 +236,16 @@ public class StringUtils
     catch (UnsupportedEncodingException e) {
       throw new RuntimeException(e);
     }
+  }
+
+  public static String maybeRemoveLeadingSlash(String s)
+  {
+    return s != null && s.startsWith("/") ? s.substring(1) : s;
+  }
+
+  public static String maybeRemoveTrailingSlash(String s)
+  {
+    return s != null && s.endsWith("/") ? s.substring(0, s.length() - 1) : s;
   }
 
   /**
@@ -462,27 +473,33 @@ public class StringUtils
   /**
    * Returns the string left-padded with the string pad to a length of len characters.
    * If str is longer than len, the return value is shortened to len characters.
-   * Lpad and rpad functions are migrated from flink's scala function with minor refactor
+   * This function is migrated from flink's scala function with minor refactor
    * https://github.com/apache/flink/blob/master/flink-table/flink-table-planner/src/main/scala/org/apache/flink/table/runtime/functions/ScalarFunctions.scala
+   * - Modified to handle empty pad string.
+   * - Padding of negative length return an empty string.
    *
    * @param base The base string to be padded
    * @param len  The length of padded string
    * @param pad  The pad string
    *
-   * @return the string left-padded with pad to a length of len
+   * @return the string left-padded with pad to a length of len or null if the pad is empty or the len is less than 0.
    */
-  public static String lpad(String base, Integer len, String pad)
+  @Nonnull
+  public static String lpad(@Nonnull String base, int len, @Nonnull String pad)
   {
-    if (len < 0) {
-      return null;
-    } else if (len == 0) {
+    if (len <= 0) {
       return "";
     }
 
-    char[] data = new char[len];
-
     // The length of the padding needed
     int pos = Math.max(len - base.length(), 0);
+
+    // short-circuit if there is no pad and we need to add a padding
+    if (pos > 0 && pad.isEmpty()) {
+      return base;
+    }
+
+    char[] data = new char[len];
 
     // Copy the padding
     for (int i = 0; i < pos; i += pad.length()) {
@@ -502,38 +519,84 @@ public class StringUtils
   /**
    * Returns the string right-padded with the string pad to a length of len characters.
    * If str is longer than len, the return value is shortened to len characters.
+   * This function is migrated from flink's scala function with minor refactor
+   * https://github.com/apache/flink/blob/master/flink-table/flink-table-planner/src/main/scala/org/apache/flink/table/runtime/functions/ScalarFunctions.scala
+   * - Modified to handle empty pad string.
+   * - Modified to only copy the pad string if needed (this implementation mimics lpad).
+   * - Padding of negative length return an empty string.
    *
    * @param base The base string to be padded
    * @param len  The length of padded string
    * @param pad  The pad string
    *
-   * @return the string right-padded with pad to a length of len
+   * @return the string right-padded with pad to a length of len or null if the pad is empty or the len is less than 0.
    */
-  public static String rpad(String base, Integer len, String pad)
+  @Nonnull
+  public static String rpad(@Nonnull String base, int len, @Nonnull String pad)
   {
-    if (len < 0) {
-      return null;
-    } else if (len == 0) {
+    if (len <= 0) {
       return "";
+    }
+
+    // The length of the padding needed
+    int paddingLen = Math.max(len - base.length(), 0);
+
+    // short-circuit if there is no pad and we need to add a padding
+    if (paddingLen > 0 && pad.isEmpty()) {
+      return base;
     }
 
     char[] data = new char[len];
 
-    int pos = 0;
-
-    // Copy the base
-    for (; pos < base.length() && pos < len; pos++) {
-      data[pos] = base.charAt(pos);
-    }
 
     // Copy the padding
-    for (; pos < len; pos += pad.length()) {
-      for (int i = 0; i < pad.length() && i < len - pos; i++) {
-        data[pos + i] = pad.charAt(i);
+    for (int i = len - paddingLen; i < len; i += pad.length()) {
+      for (int j = 0; j < pad.length() && i + j < data.length; j++) {
+        data[i + j] = pad.charAt(j);
       }
+    }
+
+    // Copy the base
+    for (int i = 0; i < len && i < base.length(); i++) {
+      data[i] = base.charAt(i);
     }
 
     return new String(data);
   }
 
+  /**
+   * Returns the string truncated to maxBytes.
+   * If given string input is shorter than maxBytes, then it remains the same.
+   *
+   * @param s        The input string to possibly be truncated
+   * @param maxBytes The max bytes that string input will be truncated to
+   *
+   * @return the string after truncated to maxBytes
+   */
+  @Nullable
+  public static String chop(@Nullable final String s, final int maxBytes)
+  {
+    if (s == null) {
+      return null;
+    } else {
+      // Shorten firstValue to what could fit in maxBytes as UTF-8.
+      final byte[] bytes = new byte[maxBytes];
+      final int len = StringUtils.toUtf8WithLimit(s, ByteBuffer.wrap(bytes));
+      return new String(bytes, 0, len, StandardCharsets.UTF_8);
+    }
+  }
+
+  /**
+   * Shorten "s" to "maxBytes" chars. Fast and loose because these are *chars* not *bytes*. Use
+   * {@link #chop(String, int)} for slower, but accurate chopping.
+   */
+  @Nullable
+  public static String fastLooseChop(@Nullable final String s, final int maxBytes)
+  {
+    if (s == null || s.length() <= maxBytes) {
+      return s;
+    } else {
+      return s.substring(0, maxBytes);
+    }
+  }
 }

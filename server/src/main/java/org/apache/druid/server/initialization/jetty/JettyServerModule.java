@@ -22,6 +22,7 @@ package org.apache.druid.server.initialization.jetty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.jaxrs.json.JacksonJsonProvider;
 import com.fasterxml.jackson.jaxrs.smile.JacksonSmileProvider;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.primitives.Ints;
 import com.google.inject.Binder;
@@ -63,6 +64,7 @@ import org.apache.druid.server.metrics.MonitorsConfig;
 import org.apache.druid.server.security.CustomCheckX509TrustManager;
 import org.apache.druid.server.security.TLSCertificateChecker;
 import org.eclipse.jetty.server.ConnectionFactory;
+import org.eclipse.jetty.server.ForwardedRequestCustomizer;
 import org.eclipse.jetty.server.Handler;
 import org.eclipse.jetty.server.HttpConfiguration;
 import org.eclipse.jetty.server.HttpConnectionFactory;
@@ -92,6 +94,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
+ *
  */
 public class JettyServerModule extends JerseyServletModule
 {
@@ -166,7 +169,7 @@ public class JettyServerModule extends JerseyServletModule
         node,
         config,
         TLSServerConfig,
-        injector.getExistingBinding(Key.get(SslContextFactory.class)),
+        injector.getExistingBinding(Key.get(SslContextFactory.Server.class)),
         injector.getInstance(TLSCertificateChecker.class)
     );
   }
@@ -195,7 +198,7 @@ public class JettyServerModule extends JerseyServletModule
       DruidNode node,
       ServerConfig config,
       TLSServerConfig tlsServerConfig,
-      Binding<SslContextFactory> sslContextFactoryBinding,
+      Binding<SslContextFactory.Server> sslContextFactoryBinding,
       TLSCertificateChecker certificateChecker
   )
   {
@@ -222,7 +225,7 @@ public class JettyServerModule extends JerseyServletModule
     final Server server = new Server(threadPool);
 
     // Without this bean set, the default ScheduledExecutorScheduler runs as non-daemon, causing lifecycle hooks to fail
-    // to fire on main exit. Related bug: https://github.com/apache/incubator-druid/pull/1627
+    // to fire on main exit. Related bug: https://github.com/apache/druid/pull/1627
     server.addBean(new ScheduledExecutorScheduler("JettyScheduler", true), true);
 
     final List<ServerConnector> serverConnectors = new ArrayList<>();
@@ -230,6 +233,10 @@ public class JettyServerModule extends JerseyServletModule
     if (node.isEnablePlaintextPort()) {
       log.info("Creating http connector with port [%d]", node.getPlaintextPort());
       HttpConfiguration httpConfiguration = new HttpConfiguration();
+      if (config.isEnableForwardedRequestCustomizer()) {
+        httpConfiguration.addCustomizer(new ForwardedRequestCustomizer());
+      }
+
       httpConfiguration.setRequestHeaderSize(config.getMaxRequestHeaderSize());
       final ServerConnector connector = new ServerConnector(server, new HttpConnectionFactory(httpConfiguration));
       if (node.isBindOnHost()) {
@@ -239,7 +246,8 @@ public class JettyServerModule extends JerseyServletModule
       serverConnectors.add(connector);
     }
 
-    final SslContextFactory sslContextFactory;
+    final SslContextFactory.Server sslContextFactory;
+
     if (node.isEnableTlsPort()) {
       log.info("Creating https connector with port [%d]", node.getTlsPort());
       if (sslContextFactoryBinding == null) {
@@ -308,6 +316,9 @@ public class JettyServerModule extends JerseyServletModule
       }
 
       final HttpConfiguration httpsConfiguration = new HttpConfiguration();
+      if (config.isEnableForwardedRequestCustomizer()) {
+        httpsConfiguration.addCustomizer(new ForwardedRequestCustomizer());
+      }
       httpsConfiguration.setSecureScheme("https");
       httpsConfiguration.setSecurePort(node.getTlsPort());
       httpsConfiguration.addCustomizer(new SecureRequestCustomizer());
@@ -337,7 +348,13 @@ public class JettyServerModule extends JerseyServletModule
 
       List<ConnectionFactory> monitoredConnFactories = new ArrayList<>();
       for (ConnectionFactory cf : connector.getConnectionFactories()) {
-        monitoredConnFactories.add(new JettyMonitoringConnectionFactory(cf, ACTIVE_CONNECTIONS));
+        // we only want to monitor the first connection factory, since it will pass the connection to subsequent
+        // connection factories (in this case HTTP/1.1 after the connection is unencrypted for SSL)
+        if (cf.getProtocol().equals(connector.getDefaultProtocol())) {
+          monitoredConnFactories.add(new JettyMonitoringConnectionFactory(cf, ACTIVE_CONNECTIONS));
+        } else {
+          monitoredConnFactories.add(cf);
+        }
       }
       connector.setConnectionFactories(monitoredConnFactories);
     }
@@ -395,7 +412,7 @@ public class JettyServerModule extends JerseyServletModule
           @Override
           public void start() throws Exception
           {
-            log.info("Starting Jetty Server...");
+            log.debug("Starting Jetty Server...");
             server.start();
             if (node.isEnableTlsPort()) {
               // Perform validation
@@ -426,12 +443,12 @@ public class JettyServerModule extends JerseyServletModule
             try {
               final long unannounceDelay = config.getUnannouncePropagationDelay().toStandardDuration().getMillis();
               if (unannounceDelay > 0) {
-                log.info("Waiting %s ms for unannouncement to propagate.", unannounceDelay);
+                log.info("Sleeping %s ms for unannouncement to propagate.", unannounceDelay);
                 Thread.sleep(unannounceDelay);
               } else {
                 log.debug("Skipping unannounce wait.");
               }
-              log.info("Stopping Jetty Server...");
+              log.debug("Stopping Jetty Server...");
               server.stop();
             }
             catch (InterruptedException e) {
@@ -483,7 +500,7 @@ public class JettyServerModule extends JerseyServletModule
     }
   }
 
-  private static class IdentityCheckOverrideSslContextFactory extends SslContextFactory
+  private static class IdentityCheckOverrideSslContextFactory extends SslContextFactory.Server
   {
     private final TLSServerConfig tlsServerConfig;
     private final TLSCertificateChecker certificateChecker;
@@ -493,7 +510,7 @@ public class JettyServerModule extends JerseyServletModule
         TLSCertificateChecker certificateChecker
     )
     {
-      super(false);
+      super();
       this.tlsServerConfig = tlsServerConfig;
       this.certificateChecker = certificateChecker;
     }
@@ -522,5 +539,11 @@ public class JettyServerModule extends JerseyServletModule
 
       return newTrustManagers;
     }
+  }
+
+  @VisibleForTesting
+  public int getActiveConnections()
+  {
+    return ACTIVE_CONNECTIONS.get();
   }
 }

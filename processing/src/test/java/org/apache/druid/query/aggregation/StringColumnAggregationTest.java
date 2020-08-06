@@ -96,12 +96,12 @@ public class StringColumnAggregationTest
     }
 
     aggregationTestHelper = AggregationTestHelper.createGroupByQueryAggregationTestHelper(
-        Collections.EMPTY_LIST,
+        Collections.emptyList(),
         new GroupByQueryConfig(),
         tempFolder
     );
 
-    IncrementalIndex index = aggregationTestHelper.createIncrementalIndex(
+    IncrementalIndex index = AggregationTestHelper.createIncrementalIndex(
         inputRows.iterator(),
         new NoopInputRowParser(null),
         new AggregatorFactory[]{new CountAggregatorFactory("count")},
@@ -129,7 +129,7 @@ public class StringColumnAggregationTest
   }
 
   @After
-  public void tearDown() throws Exception
+  public void tearDown()
   {
     if (segments != null) {
       for (Segment seg : segments) {
@@ -231,7 +231,7 @@ public class StringColumnAggregationTest
                                   )
                                   .build();
 
-    Sequence seq = AggregationTestHelper.createTimeseriesQueryAggregationTestHelper(Collections.EMPTY_LIST, tempFolder)
+    Sequence seq = AggregationTestHelper.createTimeseriesQueryAggregationTestHelper(Collections.emptyList(), tempFolder)
                                         .runQueryOnSegmentsObjs(segments, query);
     TimeseriesResultValue result = ((Result<TimeseriesResultValue>) Iterables.getOnlyElement(seq.toList())).getValue();
 

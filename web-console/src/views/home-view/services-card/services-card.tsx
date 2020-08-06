@@ -20,7 +20,8 @@ import { IconNames } from '@blueprintjs/icons';
 import axios from 'axios';
 import React from 'react';
 
-import { compact, lookupBy, pluralIfNeeded, queryDruidSql, QueryManager } from '../../../utils';
+import { PluralPairIfNeeded } from '../../../components/plural-pair-if-needed/plural-pair-if-needed';
+import { lookupBy, queryDruidSql, QueryManager } from '../../../utils';
 import { Capabilities } from '../../../utils/capabilities';
 import { HomeViewCard } from '../home-view-card/home-view-card';
 
@@ -42,20 +43,6 @@ export interface ServicesCardState {
 }
 
 export class ServicesCard extends React.PureComponent<ServicesCardProps, ServicesCardState> {
-  static renderPluralIfNeededPair(
-    count1: number,
-    singular1: string,
-    count2: number,
-    singular2: string,
-  ): JSX.Element | undefined {
-    const text = compact([
-      count1 ? pluralIfNeeded(count1, singular1) : undefined,
-      count2 ? pluralIfNeeded(count2, singular2) : undefined,
-    ]).join(', ');
-    if (!text) return;
-    return <p>{text}</p>;
-  }
-
   private serviceQueryManager: QueryManager<Capabilities, any>;
 
   constructor(props: ServicesCardProps, context: any) {
@@ -82,10 +69,8 @@ export class ServicesCard extends React.PureComponent<ServicesCardProps, Service
             query: `SELECT server_type AS "service_type", COUNT(*) as "count" FROM sys.servers GROUP BY 1`,
           });
           return lookupBy(serviceCountsFromQuery, x => x.service_type, x => x.count);
-        } else if (capabilities.hasCoordinatorAccess() || capabilities.hasOverlordAccess()) {
-          const services = capabilities.hasCoordinatorAccess()
-            ? (await axios.get('/druid/coordinator/v1/servers?simple')).data
-            : [];
+        } else if (capabilities.hasCoordinatorAccess()) {
+          const services = (await axios.get('/druid/coordinator/v1/servers?simple')).data;
 
           const middleManager = capabilities.hasOverlordAccess()
             ? (await axios.get('/druid/indexer/v1/workers')).data
@@ -97,7 +82,7 @@ export class ServicesCard extends React.PureComponent<ServicesCardProps, Service
             peon: services.filter((s: any) => s.type === 'indexer-executor').length,
           };
         } else {
-          throw new Error(`must have SQL or coordinator/overlord access`);
+          throw new Error(`must have SQL or coordinator access`);
         }
       },
       onStateChange: ({ result, loading, error }) => {
@@ -149,20 +134,30 @@ export class ServicesCard extends React.PureComponent<ServicesCardProps, Service
         loading={serviceCountLoading}
         error={serviceCountError}
       >
-        {ServicesCard.renderPluralIfNeededPair(
-          overlordCount,
-          'overlord',
-          coordinatorCount,
-          'coordinator',
-        )}
-        {ServicesCard.renderPluralIfNeededPair(routerCount, 'router', brokerCount, 'broker')}
-        {ServicesCard.renderPluralIfNeededPair(
-          historicalCount,
-          'historical',
-          middleManagerCount,
-          'middle manager',
-        )}
-        {ServicesCard.renderPluralIfNeededPair(peonCount, 'peon', indexerCount, 'indexer')}
+        <PluralPairIfNeeded
+          firstCount={overlordCount}
+          firstSingular="overlord"
+          secondCount={coordinatorCount}
+          secondSingular="coordinator"
+        />
+        <PluralPairIfNeeded
+          firstCount={routerCount}
+          firstSingular="router"
+          secondCount={brokerCount}
+          secondSingular="broker"
+        />
+        <PluralPairIfNeeded
+          firstCount={historicalCount}
+          firstSingular="historical"
+          secondCount={middleManagerCount}
+          secondSingular="middle manager"
+        />
+        <PluralPairIfNeeded
+          firstCount={peonCount}
+          firstSingular="peon"
+          secondCount={indexerCount}
+          secondSingular="indexer"
+        />
       </HomeViewCard>
     );
   }

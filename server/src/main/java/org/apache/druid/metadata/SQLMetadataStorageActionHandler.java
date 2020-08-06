@@ -22,7 +22,6 @@ package org.apache.druid.metadata;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Optional;
 import com.google.common.base.Throwables;
 import com.google.common.collect.Maps;
@@ -59,10 +58,10 @@ public abstract class SQLMetadataStorageActionHandler<EntryType, StatusType, Log
 
   private final SQLMetadataConnector connector;
   private final ObjectMapper jsonMapper;
-  private final TypeReference entryType;
-  private final TypeReference statusType;
-  private final TypeReference logType;
-  private final TypeReference lockType;
+  private final TypeReference<EntryType> entryType;
+  private final TypeReference<StatusType> statusType;
+  private final TypeReference<LogType> logType;
+  private final TypeReference<LockType> lockType;
 
   private final String entryTypeName;
   private final String entryTable;
@@ -107,7 +106,7 @@ public abstract class SQLMetadataStorageActionHandler<EntryType, StatusType, Log
     return jsonMapper;
   }
 
-  protected TypeReference getStatusType()
+  protected TypeReference<StatusType> getStatusType()
   {
     return statusType;
   }
@@ -127,7 +126,7 @@ public abstract class SQLMetadataStorageActionHandler<EntryType, StatusType, Log
     return entryTypeName;
   }
 
-  public TypeReference getEntryType()
+  public TypeReference<EntryType> getEntryType()
   {
     return entryType;
   }
@@ -173,8 +172,7 @@ public abstract class SQLMetadataStorageActionHandler<EntryType, StatusType, Log
     }
   }
 
-  @VisibleForTesting
-  protected static boolean isStatementException(Throwable e)
+  public static boolean isStatementException(Throwable e)
   {
     return e instanceof StatementException ||
            (e instanceof CallbackFailedException && e.getCause() instanceof StatementException);

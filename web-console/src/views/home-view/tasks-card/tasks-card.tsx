@@ -20,6 +20,7 @@ import { IconNames } from '@blueprintjs/icons';
 import axios from 'axios';
 import React from 'react';
 
+import { PluralPairIfNeeded } from '../../../components/plural-pair-if-needed/plural-pair-if-needed';
 import { lookupBy, pluralIfNeeded, queryDruidSql, QueryManager } from '../../../utils';
 import { Capabilities } from '../../../utils/capabilities';
 import { HomeViewCard } from '../home-view-card/home-view-card';
@@ -118,14 +119,18 @@ GROUP BY 1`,
     return (
       <HomeViewCard
         className="tasks-card"
-        href={'#tasks'}
+        href={'#ingestion'}
         icon={IconNames.GANTT_CHART}
         title={'Tasks'}
         loading={taskCountLoading}
         error={taskCountError}
       >
-        {Boolean(runningTaskCount) && <p>{pluralIfNeeded(runningTaskCount, 'running task')}</p>}
-        {Boolean(pendingTaskCount) && <p>{pluralIfNeeded(pendingTaskCount, 'pending task')}</p>}
+        <PluralPairIfNeeded
+          firstCount={runningTaskCount}
+          firstSingular="running task"
+          secondCount={pendingTaskCount}
+          secondSingular="pending task"
+        />
         {Boolean(successTaskCount) && <p>{pluralIfNeeded(successTaskCount, 'successful task')}</p>}
         {Boolean(waitingTaskCount) && <p>{pluralIfNeeded(waitingTaskCount, 'waiting task')}</p>}
         {Boolean(failedTaskCount) && <p>{pluralIfNeeded(failedTaskCount, 'failed task')}</p>}

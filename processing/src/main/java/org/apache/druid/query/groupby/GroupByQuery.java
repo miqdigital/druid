@@ -27,13 +27,12 @@ import com.google.common.base.Function;
 import com.google.common.base.Functions;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Ordering;
 import com.google.common.primitives.Longs;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.ints.IntList;
-import it.unimi.dsi.fastutil.objects.Object2IntMap;
-import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import org.apache.druid.java.util.common.DateTimes;
 import org.apache.druid.java.util.common.IAE;
 import org.apache.druid.java.util.common.ISE;
@@ -66,6 +65,7 @@ import org.apache.druid.segment.DimensionHandlerUtils;
 import org.apache.druid.segment.VirtualColumn;
 import org.apache.druid.segment.VirtualColumns;
 import org.apache.druid.segment.column.ColumnHolder;
+import org.apache.druid.segment.column.RowSignature;
 import org.apache.druid.segment.column.ValueType;
 import org.joda.time.DateTime;
 import org.joda.time.Interval;
@@ -79,6 +79,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -111,8 +112,7 @@ public class GroupByQuery extends BaseQuery<ResultRow>
 
   private final boolean applyLimitPushDown;
   private final Function<Sequence<ResultRow>, Sequence<ResultRow>> postProcessingFn;
-  private final List<String> resultRowOrder;
-  private final Object2IntMap<String> resultRowPositionLookup;
+  private final RowSignature resultRowSignature;
 
   /**
    * This is set when we know that all rows will have the same timestamp, and allows us to not actually store
@@ -132,7 +132,7 @@ public class GroupByQuery extends BaseQuery<ResultRow>
       @JsonProperty("aggregations") List<AggregatorFactory> aggregatorSpecs,
       @JsonProperty("postAggregations") List<PostAggregator> postAggregatorSpecs,
       @JsonProperty("having") @Nullable HavingSpec havingSpec,
-      @JsonProperty("limitSpec") LimitSpec limitSpec,
+      @JsonProperty("limitSpec") @Nullable LimitSpec limitSpec,
       @JsonProperty("subtotalsSpec") @Nullable List<List<String>> subtotalsSpec,
       @JsonProperty("context") Map<String, Object> context
   )
@@ -183,7 +183,7 @@ public class GroupByQuery extends BaseQuery<ResultRow>
       final @Nullable List<AggregatorFactory> aggregatorSpecs,
       final @Nullable List<PostAggregator> postAggregatorSpecs,
       final @Nullable HavingSpec havingSpec,
-      final LimitSpec limitSpec,
+      final @Nullable LimitSpec limitSpec,
       final @Nullable List<List<String>> subtotalsSpec,
       final @Nullable Function<Sequence<ResultRow>, Sequence<ResultRow>> postProcessingFn,
       final Map<String, Object> context
@@ -205,17 +205,15 @@ public class GroupByQuery extends BaseQuery<ResultRow>
         postAggregatorSpecs == null ? ImmutableList.of() : postAggregatorSpecs
     );
 
+    // Verify no duplicate names between dimensions, aggregators, and postAggregators.
+    // They will all end up in the same namespace in the returned Rows and we can't have them clobbering each other.
+    verifyOutputNames(this.dimensions, this.aggregatorSpecs, this.postAggregatorSpecs);
+
     this.universalTimestamp = computeUniversalTimestamp();
-    this.resultRowOrder = computeResultRowOrder();
-    this.resultRowPositionLookup = computeResultRowOrderLookup();
+    this.resultRowSignature = computeResultRowSignature();
     this.havingSpec = havingSpec;
     this.limitSpec = LimitSpec.nullToNoopLimitSpec(limitSpec);
     this.subtotalsSpec = verifySubtotalsSpec(subtotalsSpec, this.dimensions);
-
-    // Verify no duplicate names between dimensions, aggregators, and postAggregators.
-    // They will all end up in the same namespace in the returned Rows and we can't have them clobbering each other.
-    // We're not counting __time, even though that name is problematic. See: https://github.com/apache/incubator-druid/pull/3684
-    verifyOutputNames(this.dimensions, this.aggregatorSpecs, this.postAggregatorSpecs);
 
     this.postProcessingFn = postProcessingFn != null ? postProcessingFn : makePostProcessingFn();
 
@@ -254,6 +252,7 @@ public class GroupByQuery extends BaseQuery<ResultRow>
   }
 
   @JsonProperty
+  @Override
   public VirtualColumns getVirtualColumns()
   {
     return virtualColumns;
@@ -310,9 +309,9 @@ public class GroupByQuery extends BaseQuery<ResultRow>
    *
    * @see ResultRow for documentation about the order that fields will be in
    */
-  public List<String> getResultRowOrder()
+  public RowSignature getResultRowSignature()
   {
-    return resultRowOrder;
+    return resultRowSignature;
   }
 
   /**
@@ -328,16 +327,7 @@ public class GroupByQuery extends BaseQuery<ResultRow>
    */
   public int getResultRowSizeWithPostAggregators()
   {
-    return resultRowOrder.size();
-  }
-
-  /**
-   * Returns a map that can be used to look up the position within ResultRows of certain field names. The map's
-   * {@link Object2IntMap#getInt(Object)} method will return -1 if the field is not found.
-   */
-  public Object2IntMap<String> getResultRowPositionLookup()
-  {
-    return resultRowPositionLookup;
+    return resultRowSignature.size();
   }
 
   /**
@@ -470,32 +460,18 @@ public class GroupByQuery extends BaseQuery<ResultRow>
     return forcePushDown;
   }
 
-  private Object2IntMap<String> computeResultRowOrderLookup()
+  private RowSignature computeResultRowSignature()
   {
-    final Object2IntMap<String> indexes = new Object2IntOpenHashMap<>();
-    indexes.defaultReturnValue(-1);
-
-    int index = 0;
-    for (String columnName : resultRowOrder) {
-      indexes.put(columnName, index++);
-    }
-
-    return indexes;
-  }
-
-  private List<String> computeResultRowOrder()
-  {
-    final List<String> retVal = new ArrayList<>();
+    final RowSignature.Builder builder = RowSignature.builder();
 
     if (universalTimestamp == null) {
-      retVal.add(ColumnHolder.TIME_COLUMN_NAME);
+      builder.addTimeColumn();
     }
 
-    dimensions.stream().map(DimensionSpec::getOutputName).forEach(retVal::add);
-    aggregatorSpecs.stream().map(AggregatorFactory::getName).forEach(retVal::add);
-    postAggregatorSpecs.stream().map(PostAggregator::getName).forEach(retVal::add);
-
-    return retVal;
+    return builder.addDimensions(dimensions)
+                  .addAggregators(aggregatorSpecs)
+                  .addPostAggregators(postAggregatorSpecs)
+                  .build();
   }
 
   private boolean determineApplyLimitPushDown()
@@ -507,10 +483,10 @@ public class GroupByQuery extends BaseQuery<ResultRow>
     final boolean forceLimitPushDown = validateAndGetForceLimitPushDown();
 
     if (limitSpec instanceof DefaultLimitSpec) {
-      DefaultLimitSpec defaultLimitSpec = (DefaultLimitSpec) limitSpec;
+      DefaultLimitSpec limitSpecWithoutOffset = ((DefaultLimitSpec) limitSpec).withOffsetToLimit();
 
       // If only applying an orderby without a limit, don't try to push down
-      if (!defaultLimitSpec.isLimited()) {
+      if (!limitSpecWithoutOffset.isLimited()) {
         return false;
       }
 
@@ -562,7 +538,7 @@ public class GroupByQuery extends BaseQuery<ResultRow>
       int dimIndex = OrderByColumnSpec.getDimIndexForOrderBy(orderSpec, dimensions);
       if (dimIndex >= 0) {
         DimensionSpec dim = dimensions.get(dimIndex);
-        orderedFieldNumbers.add(resultRowPositionLookup.getInt(dim.getOutputName()));
+        orderedFieldNumbers.add(resultRowSignature.indexOf(dim.getOutputName()));
         dimsInOrderBy.add(dimIndex);
         needsReverseList.add(needsReverse);
         final ValueType type = dimensions.get(dimIndex).getOutputType();
@@ -573,7 +549,7 @@ public class GroupByQuery extends BaseQuery<ResultRow>
 
     for (int i = 0; i < dimensions.size(); i++) {
       if (!dimsInOrderBy.contains(i)) {
-        orderedFieldNumbers.add(resultRowPositionLookup.getInt(dimensions.get(i).getOutputName()));
+        orderedFieldNumbers.add(resultRowSignature.indexOf(dimensions.get(i).getOutputName()));
         needsReverseList.add(false);
         final ValueType type = dimensions.get(i).getOutputType();
         dimensionTypes.add(type);
@@ -794,6 +770,11 @@ public class GroupByQuery extends BaseQuery<ResultRow>
     return new Builder(this).setQuerySegmentSpec(spec).build();
   }
 
+  public GroupByQuery withVirtualColumns(final VirtualColumns virtualColumns)
+  {
+    return new Builder(this).setVirtualColumns(virtualColumns).build();
+  }
+
   public GroupByQuery withDimFilter(@Nullable final DimFilter dimFilter)
   {
     return new Builder(this).setDimFilter(dimFilter).build();
@@ -888,7 +869,7 @@ public class GroupByQuery extends BaseQuery<ResultRow>
     private List<PostAggregator> postAggregatorSpecs;
     @Nullable
     private HavingSpec havingSpec;
-
+    @Nullable
     private Map<String, Object> context;
 
     @Nullable
@@ -1136,6 +1117,17 @@ public class GroupByQuery extends BaseQuery<ResultRow>
       return this;
     }
 
+    public Builder randomQueryId()
+    {
+      return queryId(UUID.randomUUID().toString());
+    }
+
+    public Builder queryId(String queryId)
+    {
+      context = BaseQuery.computeOverriddenContext(context, ImmutableMap.of(BaseQuery.QUERY_ID, queryId));
+      return this;
+    }
+
     public Builder overrideContext(Map<String, Object> contextOverride)
     {
       this.context = computeOverriddenContext(context, contextOverride);
@@ -1161,7 +1153,7 @@ public class GroupByQuery extends BaseQuery<ResultRow>
         if (orderByColumnSpecs.isEmpty() && limit == Integer.MAX_VALUE) {
           theLimitSpec = NoopLimitSpec.instance();
         } else {
-          theLimitSpec = new DefaultLimitSpec(orderByColumnSpecs, limit);
+          theLimitSpec = new DefaultLimitSpec(orderByColumnSpecs, 0, limit);
         }
       } else {
         theLimitSpec = limitSpec;
@@ -1198,6 +1190,7 @@ public class GroupByQuery extends BaseQuery<ResultRow>
            ", dimensions=" + dimensions +
            ", aggregatorSpecs=" + aggregatorSpecs +
            ", postAggregatorSpecs=" + postAggregatorSpecs +
+           (subtotalsSpec != null ? (", subtotalsSpec=" + subtotalsSpec) : "") +
            ", havingSpec=" + havingSpec +
            ", context=" + getContext() +
            '}';
@@ -1222,7 +1215,8 @@ public class GroupByQuery extends BaseQuery<ResultRow>
            Objects.equals(dimFilter, that.dimFilter) &&
            Objects.equals(dimensions, that.dimensions) &&
            Objects.equals(aggregatorSpecs, that.aggregatorSpecs) &&
-           Objects.equals(postAggregatorSpecs, that.postAggregatorSpecs);
+           Objects.equals(postAggregatorSpecs, that.postAggregatorSpecs) &&
+           Objects.equals(subtotalsSpec, that.subtotalsSpec);
   }
 
   @Override
@@ -1236,7 +1230,8 @@ public class GroupByQuery extends BaseQuery<ResultRow>
         dimFilter,
         dimensions,
         aggregatorSpecs,
-        postAggregatorSpecs
+        postAggregatorSpecs,
+        subtotalsSpec
     );
   }
 }

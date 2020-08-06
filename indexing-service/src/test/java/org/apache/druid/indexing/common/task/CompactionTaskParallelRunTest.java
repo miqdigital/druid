@@ -19,41 +19,49 @@
 
 package org.apache.druid.indexing.common.task;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Lists;
 import com.google.common.io.Files;
-import org.apache.druid.client.ImmutableDruidDataSource;
-import org.apache.druid.client.coordinator.CoordinatorClient;
-import org.apache.druid.client.indexing.IndexingServiceClient;
+import org.apache.druid.data.input.InputSplit;
+import org.apache.druid.data.input.SegmentsSplitHintSpec;
+import org.apache.druid.data.input.impl.CsvInputFormat;
 import org.apache.druid.data.input.impl.DimensionsSpec;
+import org.apache.druid.data.input.impl.LocalInputSource;
+import org.apache.druid.data.input.impl.TimestampSpec;
 import org.apache.druid.indexer.TaskState;
+import org.apache.druid.indexer.partitions.HashedPartitionsSpec;
+import org.apache.druid.indexer.partitions.PartitionsSpec;
+import org.apache.druid.indexer.partitions.SingleDimensionPartitionsSpec;
 import org.apache.druid.indexing.common.LockGranularity;
 import org.apache.druid.indexing.common.RetryPolicyConfig;
 import org.apache.druid.indexing.common.RetryPolicyFactory;
-import org.apache.druid.indexing.common.SegmentLoaderFactory;
 import org.apache.druid.indexing.common.TestUtils;
 import org.apache.druid.indexing.common.stats.RowIngestionMetersFactory;
+import org.apache.druid.indexing.common.task.CompactionTask.Builder;
 import org.apache.druid.indexing.common.task.batch.parallel.AbstractParallelIndexSupervisorTaskTest;
+import org.apache.druid.indexing.common.task.batch.parallel.ParallelIndexIOConfig;
 import org.apache.druid.indexing.common.task.batch.parallel.ParallelIndexIngestionSpec;
 import org.apache.druid.indexing.common.task.batch.parallel.ParallelIndexSupervisorTask;
 import org.apache.druid.indexing.common.task.batch.parallel.ParallelIndexTuningConfig;
-import org.apache.druid.indexing.common.task.batch.parallel.SinglePhaseParallelIndexingTest.TestSupervisorTask;
-import org.apache.druid.indexing.overlord.Segments;
-import org.apache.druid.java.util.common.ISE;
+import org.apache.druid.indexing.firehose.WindowedSegmentId;
+import org.apache.druid.indexing.input.DruidInputSource;
 import org.apache.druid.java.util.common.Intervals;
 import org.apache.druid.java.util.common.granularity.Granularities;
-import org.apache.druid.java.util.common.granularity.Granularity;
 import org.apache.druid.query.aggregation.AggregatorFactory;
+import org.apache.druid.query.aggregation.LongSumAggregatorFactory;
+import org.apache.druid.segment.SegmentUtils;
+import org.apache.druid.segment.indexing.DataSchema;
 import org.apache.druid.segment.indexing.granularity.UniformGranularitySpec;
 import org.apache.druid.segment.realtime.appenderator.AppenderatorsManager;
-import org.apache.druid.segment.realtime.firehose.ChatHandlerProvider;
 import org.apache.druid.segment.realtime.firehose.NoopChatHandlerProvider;
 import org.apache.druid.server.security.AuthTestUtils;
-import org.apache.druid.server.security.AuthorizerMapper;
 import org.apache.druid.timeline.DataSegment;
-import org.apache.druid.timeline.SegmentId;
+import org.apache.druid.timeline.partition.NumberedOverwriteShardSpec;
+import org.apache.druid.timeline.partition.NumberedShardSpec;
+import org.apache.druid.timeline.partition.PartitionIds;
+import org.apache.druid.timeline.partition.ShardSpec;
 import org.joda.time.Interval;
-import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
@@ -65,9 +73,13 @@ import java.io.BufferedWriter;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.Collection;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
 
 @RunWith(Parameterized.class)
 public class CompactionTaskParallelRunTest extends AbstractParallelIndexSupervisorTaskTest
@@ -83,93 +95,27 @@ public class CompactionTaskParallelRunTest extends AbstractParallelIndexSupervis
 
   private static final String DATA_SOURCE = "test";
   private static final RetryPolicyFactory RETRY_POLICY_FACTORY = new RetryPolicyFactory(new RetryPolicyConfig());
+  private static final Interval INTERVAL_TO_INDEX = Intervals.of("2014-01-01/2014-01-02");
 
   private final AppenderatorsManager appenderatorsManager = new TestAppenderatorsManager();
   private final LockGranularity lockGranularity;
   private final RowIngestionMetersFactory rowIngestionMetersFactory;
-  private final CoordinatorClient coordinatorClient;
+
+  private File inputDir;
 
   public CompactionTaskParallelRunTest(LockGranularity lockGranularity)
   {
     this.lockGranularity = lockGranularity;
     this.rowIngestionMetersFactory = new TestUtils().getRowIngestionMetersFactory();
-    coordinatorClient = new CoordinatorClient(null, null)
-    {
-      @Override
-      public Collection<DataSegment> getDatabaseSegmentDataSourceSegments(String dataSource, List<Interval> intervals)
-      {
-        return getStorageCoordinator().getUsedSegmentsForIntervals(dataSource, intervals, Segments.ONLY_VISIBLE);
-      }
-
-      @Override
-      public DataSegment getDatabaseSegmentDataSourceSegment(String dataSource, String segmentId)
-      {
-        ImmutableDruidDataSource druidDataSource = getMetadataSegmentManager().getImmutableDataSourceWithUsedSegments(
-            dataSource
-        );
-        if (druidDataSource == null) {
-          throw new ISE("Unknown datasource[%s]", dataSource);
-        }
-
-        for (SegmentId possibleSegmentId : SegmentId.iteratePossibleParsingsWithDataSource(dataSource, segmentId)) {
-          DataSegment segment = druidDataSource.getSegment(possibleSegmentId);
-          if (segment != null) {
-            return segment;
-          }
-        }
-        throw new ISE("Can't find segment for id[%s]", segmentId);
-      }
-    };
   }
 
   @Before
   public void setup() throws IOException
   {
-    indexingServiceClient = new LocalIndexingServiceClient();
-    localDeepStorage = temporaryFolder.newFolder();
-  }
+    getObjectMapper().registerSubtypes(ParallelIndexTuningConfig.class, DruidInputSource.class);
 
-  @After
-  public void teardown()
-  {
-    indexingServiceClient.shutdown();
-    temporaryFolder.delete();
-  }
-
-  @Test
-  public void testRunParallel() throws Exception
-  {
-    runIndexTask();
-
-    final CompactionTask compactionTask = new TestCompactionTask(
-        null,
-        null,
-        DATA_SOURCE,
-        new CompactionIOConfig(new CompactionIntervalSpec(Intervals.of("2014-01-01/2014-01-02"), null)),
-        null,
-        null,
-        null,
-        null,
-        newTuningConfig(),
-        null,
-        getObjectMapper(),
-        AuthTestUtils.TEST_AUTHORIZER_MAPPER,
-        new NoopChatHandlerProvider(),
-        rowIngestionMetersFactory,
-        coordinatorClient,
-        indexingServiceClient,
-        getSegmentLoaderFactory(),
-        RETRY_POLICY_FACTORY,
-        appenderatorsManager
-    );
-
-    runTask(compactionTask);
-  }
-
-  private void runIndexTask() throws Exception
-  {
-    File tmpDir = temporaryFolder.newFolder();
-    File tmpFile = File.createTempFile("druid", "index", tmpDir);
+    inputDir = temporaryFolder.newFolder();
+    final File tmpFile = File.createTempFile("druid", "index", inputDir);
 
     try (BufferedWriter writer = Files.newWriter(tmpFile, StandardCharsets.UTF_8)) {
       writer.write("2014-01-01T00:00:10Z,a,1\n");
@@ -182,25 +128,208 @@ public class CompactionTaskParallelRunTest extends AbstractParallelIndexSupervis
       writer.write("2014-01-01T02:00:30Z,b,2\n");
       writer.write("2014-01-01T02:00:30Z,c,3\n");
     }
+  }
 
-    IndexTask indexTask = new IndexTask(
-        null,
-        null,
-        IndexTaskTest.createIngestionSpec(
-            getObjectMapper(),
-            tmpDir,
-            CompactionTaskRunTest.DEFAULT_PARSE_SPEC,
-            new UniformGranularitySpec(
-                Granularities.HOUR,
-                Granularities.MINUTE,
-                null
-            ),
-            IndexTaskTest.createTuningConfig(2, 2, null, 2L, null, null, false, true),
-            false
-        ),
-        null,
+  @Test
+  public void testRunParallel()
+  {
+    runIndexTask(null, true);
+
+    final Builder builder = new Builder(
+        DATA_SOURCE,
+        getObjectMapper(),
         AuthTestUtils.TEST_AUTHORIZER_MAPPER,
         new NoopChatHandlerProvider(),
+        rowIngestionMetersFactory,
+        null,
+        null,
+        getSegmentLoaderFactory(),
+        RETRY_POLICY_FACTORY,
+        appenderatorsManager
+    );
+    final CompactionTask compactionTask = builder
+        .inputSpec(new CompactionIntervalSpec(INTERVAL_TO_INDEX, null))
+        .tuningConfig(AbstractParallelIndexSupervisorTaskTest.DEFAULT_TUNING_CONFIG_FOR_PARALLEL_INDEXING)
+        .build();
+
+    runTask(compactionTask);
+  }
+
+  @Test
+  public void testCompactHashAndDynamicPartitionedSegments()
+  {
+    runIndexTask(new HashedPartitionsSpec(null, 2, null), false);
+    runIndexTask(null, true);
+    final Builder builder = new Builder(
+        DATA_SOURCE,
+        getObjectMapper(),
+        AuthTestUtils.TEST_AUTHORIZER_MAPPER,
+        new NoopChatHandlerProvider(),
+        rowIngestionMetersFactory,
+        null,
+        null,
+        getSegmentLoaderFactory(),
+        RETRY_POLICY_FACTORY,
+        appenderatorsManager
+    );
+    final CompactionTask compactionTask = builder
+        .inputSpec(new CompactionIntervalSpec(INTERVAL_TO_INDEX, null))
+        .tuningConfig(AbstractParallelIndexSupervisorTaskTest.DEFAULT_TUNING_CONFIG_FOR_PARALLEL_INDEXING)
+        .build();
+
+    final Map<Interval, List<DataSegment>> intervalToSegments = SegmentUtils.groupSegmentsByInterval(
+        runTask(compactionTask)
+    );
+    Assert.assertEquals(3, intervalToSegments.size());
+    Assert.assertEquals(
+        ImmutableSet.of(
+            Intervals.of("2014-01-01T00/PT1H"),
+            Intervals.of("2014-01-01T01/PT1H"),
+            Intervals.of("2014-01-01T02/PT1H")
+        ),
+        intervalToSegments.keySet()
+    );
+    for (Entry<Interval, List<DataSegment>> entry : intervalToSegments.entrySet()) {
+      final List<DataSegment> segmentsInInterval = entry.getValue();
+      Assert.assertEquals(1, segmentsInInterval.size());
+      final ShardSpec shardSpec = segmentsInInterval.get(0).getShardSpec();
+      if (lockGranularity == LockGranularity.TIME_CHUNK) {
+        Assert.assertSame(NumberedShardSpec.class, shardSpec.getClass());
+        final NumberedShardSpec numberedShardSpec = (NumberedShardSpec) shardSpec;
+        Assert.assertEquals(0, numberedShardSpec.getPartitionNum());
+        Assert.assertEquals(1, numberedShardSpec.getNumCorePartitions());
+      } else {
+        Assert.assertSame(NumberedOverwriteShardSpec.class, shardSpec.getClass());
+        final NumberedOverwriteShardSpec numberedShardSpec = (NumberedOverwriteShardSpec) shardSpec;
+        Assert.assertEquals(PartitionIds.NON_ROOT_GEN_START_PARTITION_ID, numberedShardSpec.getPartitionNum());
+        Assert.assertEquals(1, numberedShardSpec.getAtomicUpdateGroupSize());
+      }
+    }
+  }
+
+  @Test
+  public void testCompactRangeAndDynamicPartitionedSegments()
+  {
+    runIndexTask(new SingleDimensionPartitionsSpec(2, null, "dim", false), false);
+    runIndexTask(null, true);
+    final Builder builder = new Builder(
+        DATA_SOURCE,
+        getObjectMapper(),
+        AuthTestUtils.TEST_AUTHORIZER_MAPPER,
+        new NoopChatHandlerProvider(),
+        rowIngestionMetersFactory,
+        null,
+        null,
+        getSegmentLoaderFactory(),
+        RETRY_POLICY_FACTORY,
+        appenderatorsManager
+    );
+    final CompactionTask compactionTask = builder
+        .inputSpec(new CompactionIntervalSpec(INTERVAL_TO_INDEX, null))
+        .tuningConfig(AbstractParallelIndexSupervisorTaskTest.DEFAULT_TUNING_CONFIG_FOR_PARALLEL_INDEXING)
+        .build();
+
+    final Map<Interval, List<DataSegment>> intervalToSegments = SegmentUtils.groupSegmentsByInterval(
+        runTask(compactionTask)
+    );
+    Assert.assertEquals(3, intervalToSegments.size());
+    Assert.assertEquals(
+        ImmutableSet.of(
+            Intervals.of("2014-01-01T00/PT1H"),
+            Intervals.of("2014-01-01T01/PT1H"),
+            Intervals.of("2014-01-01T02/PT1H")
+        ),
+        intervalToSegments.keySet()
+    );
+    for (Entry<Interval, List<DataSegment>> entry : intervalToSegments.entrySet()) {
+      final List<DataSegment> segmentsInInterval = entry.getValue();
+      Assert.assertEquals(1, segmentsInInterval.size());
+      final ShardSpec shardSpec = segmentsInInterval.get(0).getShardSpec();
+      if (lockGranularity == LockGranularity.TIME_CHUNK) {
+        Assert.assertSame(NumberedShardSpec.class, shardSpec.getClass());
+        final NumberedShardSpec numberedShardSpec = (NumberedShardSpec) shardSpec;
+        Assert.assertEquals(0, numberedShardSpec.getPartitionNum());
+        Assert.assertEquals(1, numberedShardSpec.getNumCorePartitions());
+      } else {
+        Assert.assertSame(NumberedOverwriteShardSpec.class, shardSpec.getClass());
+        final NumberedOverwriteShardSpec numberedShardSpec = (NumberedOverwriteShardSpec) shardSpec;
+        Assert.assertEquals(PartitionIds.NON_ROOT_GEN_START_PARTITION_ID, numberedShardSpec.getPartitionNum());
+        Assert.assertEquals(1, numberedShardSpec.getAtomicUpdateGroupSize());
+      }
+    }
+  }
+
+  @Test
+  public void testDruidInputSourceCreateSplitsWithIndividualSplits()
+  {
+    runIndexTask(null, true);
+
+    List<InputSplit<List<WindowedSegmentId>>> splits = Lists.newArrayList(
+        DruidInputSource.createSplits(
+            getCoordinatorClient(),
+            RETRY_POLICY_FACTORY,
+            DATA_SOURCE,
+            INTERVAL_TO_INDEX,
+            new SegmentsSplitHintSpec(1L) // each segment gets its own split with this config
+        )
+    );
+
+    List<DataSegment> segments = new ArrayList<>(
+        getCoordinatorClient().fetchUsedSegmentsInDataSourceForIntervals(
+            DATA_SOURCE,
+            ImmutableList.of(INTERVAL_TO_INDEX)
+        )
+    );
+
+    Set<String> segmentIdsFromSplits = new HashSet<>();
+    Set<String> segmentIdsFromCoordinator = new HashSet<>();
+    Assert.assertEquals(segments.size(), splits.size());
+    for (int i = 0; i < segments.size(); i++) {
+      segmentIdsFromCoordinator.add(segments.get(i).getId().toString());
+      segmentIdsFromSplits.add(splits.get(i).get().get(0).getSegmentId());
+    }
+    Assert.assertEquals(segmentIdsFromCoordinator, segmentIdsFromSplits);
+  }
+
+  private void runIndexTask(@Nullable PartitionsSpec partitionsSpec, boolean appendToExisting)
+  {
+    ParallelIndexIOConfig ioConfig = new ParallelIndexIOConfig(
+        null,
+        new LocalInputSource(inputDir, "druid*"),
+        new CsvInputFormat(
+            Arrays.asList("ts", "dim", "val"),
+            "|",
+            null,
+            false,
+            0
+        ),
+        appendToExisting
+    );
+    ParallelIndexTuningConfig tuningConfig = newTuningConfig(partitionsSpec, 2, !appendToExisting);
+    ParallelIndexSupervisorTask indexTask = new ParallelIndexSupervisorTask(
+        null,
+        null,
+        null,
+        new ParallelIndexIngestionSpec(
+            new DataSchema(
+                DATA_SOURCE,
+                new TimestampSpec("ts", "auto", null),
+                new DimensionsSpec(DimensionsSpec.getDefaultSchemas(Arrays.asList("ts", "dim"))),
+                new AggregatorFactory[]{new LongSumAggregatorFactory("val", "val")},
+                new UniformGranularitySpec(
+                    Granularities.HOUR,
+                    Granularities.MINUTE,
+                    ImmutableList.of(INTERVAL_TO_INDEX)
+                ),
+                null
+            ),
+            ioConfig,
+            tuningConfig
+        ),
+        null,
+        null,
+        new NoopChatHandlerProvider(),
+        AuthTestUtils.TEST_AUTHORIZER_MAPPER,
         rowIngestionMetersFactory,
         appenderatorsManager
     );
@@ -208,111 +337,10 @@ public class CompactionTaskParallelRunTest extends AbstractParallelIndexSupervis
     runTask(indexTask);
   }
 
-  private void runTask(Task task) throws Exception
+  private Set<DataSegment> runTask(Task task)
   {
-    actionClient = createActionClient(task);
-    toolbox = createTaskToolbox(task);
-    prepareTaskForLocking(task);
     task.addToContext(Tasks.FORCE_TIME_CHUNK_LOCK_KEY, lockGranularity == LockGranularity.TIME_CHUNK);
-    Assert.assertTrue(task.isReady(actionClient));
-    Assert.assertEquals(TaskState.SUCCESS, task.run(toolbox).getStatusCode());
-    shutdownTask(task);
-  }
-
-  private static ParallelIndexTuningConfig newTuningConfig()
-  {
-    return new ParallelIndexTuningConfig(
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        2,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null
-    );
-  }
-
-  private static class TestCompactionTask extends CompactionTask
-  {
-    private final IndexingServiceClient indexingServiceClient;
-
-    TestCompactionTask(
-        String id,
-        TaskResource taskResource,
-        String dataSource,
-        @Nullable CompactionIOConfig ioConfig,
-        @Nullable DimensionsSpec dimensions,
-        @Nullable DimensionsSpec dimensionsSpec,
-        @Nullable AggregatorFactory[] metricsSpec,
-        @Nullable Granularity segmentGranularity,
-        @Nullable ParallelIndexTuningConfig tuningConfig,
-        @Nullable Map<String, Object> context,
-        ObjectMapper jsonMapper,
-        AuthorizerMapper authorizerMapper,
-        ChatHandlerProvider chatHandlerProvider,
-        RowIngestionMetersFactory rowIngestionMetersFactory,
-        CoordinatorClient coordinatorClient,
-        @Nullable IndexingServiceClient indexingServiceClient,
-        SegmentLoaderFactory segmentLoaderFactory,
-        RetryPolicyFactory retryPolicyFactory,
-        AppenderatorsManager appenderatorsManager
-    )
-    {
-      super(
-          id,
-          taskResource,
-          dataSource,
-          null,
-          null,
-          ioConfig,
-          dimensions,
-          dimensionsSpec,
-          metricsSpec,
-          segmentGranularity,
-          tuningConfig,
-          context,
-          jsonMapper,
-          authorizerMapper,
-          chatHandlerProvider,
-          rowIngestionMetersFactory,
-          coordinatorClient,
-          indexingServiceClient,
-          segmentLoaderFactory,
-          retryPolicyFactory,
-          appenderatorsManager
-      );
-      this.indexingServiceClient = indexingServiceClient;
-    }
-
-    @Override
-    ParallelIndexSupervisorTask newTask(String taskId, ParallelIndexIngestionSpec ingestionSpec)
-    {
-      return new TestSupervisorTask(
-          taskId,
-          null,
-          ingestionSpec,
-          createContextForSubtask(),
-          indexingServiceClient
-      );
-    }
+    Assert.assertEquals(TaskState.SUCCESS, getIndexingServiceClient().runAndWait(task).getStatusCode());
+    return getIndexingServiceClient().getPublishedSegments(task);
   }
 }

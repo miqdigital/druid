@@ -19,6 +19,7 @@
 
 package org.apache.druid.query;
 
+import org.apache.druid.java.util.common.HumanReadableBytes;
 import org.apache.druid.java.util.common.concurrent.ExecutorServiceConfig;
 import org.apache.druid.java.util.common.guava.ParallelMergeCombiningSequence;
 import org.apache.druid.java.util.common.logger.Logger;
@@ -40,14 +41,14 @@ public abstract class DruidProcessingConfig extends ExecutorServiceConfig implem
   private AtomicReference<Integer> computedBufferSizeBytes = new AtomicReference<>();
 
   @Config({"druid.computation.buffer.size", "${base_path}.buffer.sizeBytes"})
-  public int intermediateComputeSizeBytesConfigured()
+  public HumanReadableBytes intermediateComputeSizeBytesConfigured()
   {
-    return DEFAULT_PROCESSING_BUFFER_SIZE_BYTES;
+    return HumanReadableBytes.valueOf(DEFAULT_PROCESSING_BUFFER_SIZE_BYTES);
   }
 
   public int intermediateComputeSizeBytes()
   {
-    int sizeBytesConfigured = intermediateComputeSizeBytesConfigured();
+    int sizeBytesConfigured = intermediateComputeSizeBytesConfigured().getBytesInInt();
     if (sizeBytesConfigured != DEFAULT_PROCESSING_BUFFER_SIZE_BYTES) {
       return sizeBytesConfigured;
     } else if (computedBufferSizeBytes.get() != null) {
@@ -148,22 +149,39 @@ public abstract class DruidProcessingConfig extends ExecutorServiceConfig implem
   }
 
   @Config(value = "${base_path}.merge.useParallelMergePool")
-  public boolean useParallelMergePool()
+  public boolean useParallelMergePoolConfigured()
   {
     return true;
   }
 
+  public boolean useParallelMergePool()
+  {
+    final boolean useParallelMergePoolConfigured = useParallelMergePoolConfigured();
+    final int parallelism = getMergePoolParallelism();
+    // need at least 3 to do 2 layer merge
+    if (parallelism > 2) {
+      return useParallelMergePoolConfigured;
+    }
+    if (useParallelMergePoolConfigured) {
+      log.debug(
+          "Parallel merge pool is enabled, but there are not enough cores to enable parallel merges: %s",
+          parallelism
+      );
+    }
+    return false;
+  }
+
   @Config(value = "${base_path}.merge.pool.parallelism")
-  public int getNumThreadsMergePoolConfigured()
+  public int getMergePoolParallelismConfigured()
   {
     return DEFAULT_NUM_THREADS;
   }
 
   public int getMergePoolParallelism()
   {
-    int numThreadsConfigured = getNumThreadsMergePoolConfigured();
-    if (numThreadsConfigured != DEFAULT_NUM_THREADS) {
-      return numThreadsConfigured;
+    int poolParallelismConfigured = getMergePoolParallelismConfigured();
+    if (poolParallelismConfigured != DEFAULT_NUM_THREADS) {
+      return poolParallelismConfigured;
     } else {
       // assume 2 hyper-threads per core, so that this value is probably by default the number of physical cores * 1.5
       return (int) Math.ceil(JvmUtils.getRuntimeInfo().getAvailableProcessors() * 0.75);

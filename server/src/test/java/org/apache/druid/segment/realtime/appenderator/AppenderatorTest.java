@@ -45,6 +45,7 @@ import org.apache.druid.query.timeseries.TimeseriesQuery;
 import org.apache.druid.query.timeseries.TimeseriesResultValue;
 import org.apache.druid.segment.indexing.RealtimeTuningConfig;
 import org.apache.druid.segment.realtime.plumber.Committers;
+import org.apache.druid.testing.InitializedNullHandlingTest;
 import org.apache.druid.timeline.DataSegment;
 import org.apache.druid.timeline.partition.LinearShardSpec;
 import org.junit.Assert;
@@ -58,7 +59,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class AppenderatorTest
+public class AppenderatorTest extends InitializedNullHandlingTest
 {
   private static final List<SegmentIdWithShardSpec> IDENTIFIERS = ImmutableList.of(
       si("2000/2001", "A", 0),
@@ -120,17 +121,17 @@ public class AppenderatorTest
       Assert.assertTrue(thrown);
 
       // push all
-      final SegmentsAndMetadata segmentsAndMetadata = appenderator.push(
+      final SegmentsAndCommitMetadata segmentsAndCommitMetadata = appenderator.push(
           appenderator.getSegments(),
           committerSupplier.get(),
           false
       ).get();
-      Assert.assertEquals(ImmutableMap.of("x", "3"), (Map<String, String>) segmentsAndMetadata.getCommitMetadata());
+      Assert.assertEquals(ImmutableMap.of("x", "3"), (Map<String, String>) segmentsAndCommitMetadata.getCommitMetadata());
       Assert.assertEquals(
           IDENTIFIERS.subList(0, 2),
           sorted(
               Lists.transform(
-                  segmentsAndMetadata.getSegments(),
+                  segmentsAndCommitMetadata.getSegments(),
                   new Function<DataSegment, SegmentIdWithShardSpec>()
                   {
                     @Override
@@ -142,7 +143,7 @@ public class AppenderatorTest
               )
           )
       );
-      Assert.assertEquals(sorted(tester.getPushedSegments()), sorted(segmentsAndMetadata.getSegments()));
+      Assert.assertEquals(sorted(tester.getPushedSegments()), sorted(segmentsAndCommitMetadata.getSegments()));
 
       // clear
       appenderator.clear();

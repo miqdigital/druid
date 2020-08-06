@@ -23,9 +23,9 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Lists;
 import org.apache.druid.utils.JvmUtils;
-import org.hibernate.validator.constraints.NotEmpty;
 
 import java.io.File;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -34,8 +34,10 @@ import java.util.concurrent.TimeUnit;
 public class SegmentLoaderConfig
 {
   @JsonProperty
-  @NotEmpty
-  private List<StorageLocationConfig> locations = null;
+  private List<StorageLocationConfig> locations = Collections.emptyList();
+
+  @JsonProperty("lazyLoadOnStart")
+  private boolean lazyLoadOnStart = false;
 
   @JsonProperty("deleteOnRemove")
   private boolean deleteOnRemove = true;
@@ -47,7 +49,7 @@ public class SegmentLoaderConfig
   private int announceIntervalMillis = 0; // do not background announce
 
   @JsonProperty("numLoadingThreads")
-  private int numLoadingThreads = JvmUtils.getRuntimeInfo().getAvailableProcessors();
+  private int numLoadingThreads = Math.max(1, JvmUtils.getRuntimeInfo().getAvailableProcessors() / 6);
 
   @JsonProperty("numBootstrapThreads")
   private Integer numBootstrapThreads = null;
@@ -64,6 +66,11 @@ public class SegmentLoaderConfig
   public List<StorageLocationConfig> getLocations()
   {
     return locations;
+  }
+
+  public boolean isLazyLoadOnStart()
+  {
+    return lazyLoadOnStart;
   }
 
   public boolean isDeleteOnRemove()

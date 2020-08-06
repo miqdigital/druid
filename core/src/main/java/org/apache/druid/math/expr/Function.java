@@ -29,14 +29,20 @@ import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
 import org.joda.time.format.DateTimeFormat;
 
+import javax.annotation.Nullable;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.BinaryOperator;
+import java.util.function.DoubleBinaryOperator;
+import java.util.function.LongBinaryOperator;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -47,7 +53,7 @@ import java.util.stream.Stream;
  * Do NOT remove "unused" members in this class. They are used by generated Antlr
  */
 @SuppressWarnings("unused")
-interface Function
+public interface Function
 {
   /**
    * Name of the function.
@@ -224,7 +230,7 @@ interface Function
       return eval(x.asString(), y.asInt());
     }
 
-    protected abstract ExprEval eval(String x, int y);
+    protected abstract ExprEval eval(@Nullable String x, int y);
   }
 
   /**
@@ -688,6 +694,11 @@ interface Function
 
   class Round implements Function
   {
+    //CHECKSTYLE.OFF: Regexp
+    private static final BigDecimal MAX_FINITE_VALUE = BigDecimal.valueOf(Double.MAX_VALUE);
+    private static final BigDecimal MIN_FINITE_VALUE = BigDecimal.valueOf(-1 * Double.MAX_VALUE);
+    //CHECKSTYLE.ON: Regexp
+
     @Override
     public String name()
     {
@@ -699,7 +710,11 @@ interface Function
     {
       ExprEval value1 = args.get(0).eval(bindings);
       if (value1.type() != ExprType.LONG && value1.type() != ExprType.DOUBLE) {
-        throw new IAE("The first argument to the function[%s] should be integer or double type but get the %s type", name(), value1.type());
+        throw new IAE(
+            "The first argument to the function[%s] should be integer or double type but got the type: %s",
+            name(),
+            value1.type()
+        );
       }
 
       if (args.size() == 1) {
@@ -707,7 +722,11 @@ interface Function
       } else {
         ExprEval value2 = args.get(1).eval(bindings);
         if (value2.type() != ExprType.LONG) {
-          throw new IAE("The second argument to the function[%s] should be integer type but get the %s type", name(), value2.type());
+          throw new IAE(
+              "The second argument to the function[%s] should be integer type but got the type: %s",
+              name(),
+              value2.type()
+          );
         }
         return eval(value1, value2.asInt());
       }
@@ -731,10 +750,26 @@ interface Function
       if (param.type() == ExprType.LONG) {
         return ExprEval.of(BigDecimal.valueOf(param.asLong()).setScale(scale, RoundingMode.HALF_UP).longValue());
       } else if (param.type() == ExprType.DOUBLE) {
-        return ExprEval.of(BigDecimal.valueOf(param.asDouble()).setScale(scale, RoundingMode.HALF_UP).doubleValue());
+        BigDecimal decimal = safeGetFromDouble(param.asDouble());
+        return ExprEval.of(decimal.setScale(scale, RoundingMode.HALF_UP).doubleValue());
       } else {
         return ExprEval.of(null);
       }
+    }
+
+    /**
+     * Converts non-finite doubles to BigDecimal values instead of throwing a NumberFormatException.
+     */
+    private static BigDecimal safeGetFromDouble(double val)
+    {
+      if (Double.isNaN(val)) {
+        return BigDecimal.ZERO;
+      } else if (val == Double.POSITIVE_INFINITY) {
+        return MAX_FINITE_VALUE;
+      } else if (val == Double.NEGATIVE_INFINITY) {
+        return MIN_FINITE_VALUE;
+      }
+      return BigDecimal.valueOf(val);
     }
   }
 
@@ -972,6 +1007,172 @@ interface Function
     protected ExprEval eval(double x, double y)
     {
       return ExprEval.of(Math.min(x, y));
+    }
+  }
+
+  class GreatestFunc extends ReduceFunc
+  {
+    public static final String NAME = "greatest";
+
+    public GreatestFunc()
+    {
+      super(
+          Math::max,
+          Math::max,
+          BinaryOperator.maxBy(Comparator.naturalOrder())
+      );
+    }
+
+    @Override
+    public String name()
+    {
+      return NAME;
+    }
+  }
+
+  class LeastFunc extends ReduceFunc
+  {
+    public static final String NAME = "least";
+
+    public LeastFunc()
+    {
+      super(
+          Math::min,
+          Math::min,
+          BinaryOperator.minBy(Comparator.naturalOrder())
+      );
+    }
+
+    @Override
+    public String name()
+    {
+      return NAME;
+    }
+  }
+
+  abstract class ReduceFunc implements Function
+  {
+    private final DoubleBinaryOperator doubleReducer;
+    private final LongBinaryOperator longReducer;
+    private final BinaryOperator<String> stringReducer;
+
+    ReduceFunc(
+        DoubleBinaryOperator doubleReducer,
+        LongBinaryOperator longReducer,
+        BinaryOperator<String> stringReducer
+    )
+    {
+      this.doubleReducer = doubleReducer;
+      this.longReducer = longReducer;
+      this.stringReducer = stringReducer;
+    }
+
+    @Override
+    public void validateArguments(List<Expr> args)
+    {
+      // anything goes
+    }
+
+    @Override
+    public ExprEval apply(List<Expr> args, Expr.ObjectBinding bindings)
+    {
+      if (args.isEmpty()) {
+        return ExprEval.of(null);
+      }
+
+      ExprAnalysis exprAnalysis = analyzeExprs(args, bindings);
+      if (exprAnalysis.exprEvals.isEmpty()) {
+        // The GREATEST/LEAST functions are not in the SQL standard. Emulate the behavior of postgres (return null if
+        // all expressions are null, otherwise skip null values) since it is used as a base for a wide number of
+        // databases. This also matches the behavior the the long/double greatest/least post aggregators. Some other
+        // databases (e.g., MySQL) return null if any expression is null.
+        // https://www.postgresql.org/docs/9.5/functions-conditional.html
+        // https://dev.mysql.com/doc/refman/8.0/en/comparison-operators.html#function_least
+        return ExprEval.of(null);
+      }
+
+      Stream<ExprEval<?>> exprEvalStream = exprAnalysis.exprEvals.stream();
+      switch (exprAnalysis.comparisonType) {
+        case DOUBLE:
+          //noinspection OptionalGetWithoutIsPresent (empty list handled earlier)
+          return ExprEval.of(exprEvalStream.mapToDouble(ExprEval::asDouble).reduce(doubleReducer).getAsDouble());
+        case LONG:
+          //noinspection OptionalGetWithoutIsPresent (empty list handled earlier)
+          return ExprEval.of(exprEvalStream.mapToLong(ExprEval::asLong).reduce(longReducer).getAsLong());
+        default:
+          //noinspection OptionalGetWithoutIsPresent (empty list handled earlier)
+          return ExprEval.of(exprEvalStream.map(ExprEval::asString).reduce(stringReducer).get());
+      }
+    }
+
+    /**
+     * Determines which {@link ExprType} to use to compare non-null evaluated expressions.
+     *
+     * @param exprs    Expressions to analyze
+     * @param bindings Bindings for expressions
+     *
+     * @return Comparison type and non-null evaluated expressions.
+     */
+    private ExprAnalysis analyzeExprs(List<Expr> exprs, Expr.ObjectBinding bindings)
+    {
+      Set<ExprType> presentTypes = EnumSet.noneOf(ExprType.class);
+      List<ExprEval<?>> exprEvals = new ArrayList<>();
+
+      for (Expr expr : exprs) {
+        ExprEval<?> exprEval = expr.eval(bindings);
+        ExprType exprType = exprEval.type();
+
+        if (isValidType(exprType)) {
+          presentTypes.add(exprType);
+        }
+
+        if (exprEval.value() != null) {
+          exprEvals.add(exprEval);
+        }
+      }
+
+      ExprType comparisonType = getComparisionType(presentTypes);
+      return new ExprAnalysis(comparisonType, exprEvals);
+    }
+
+    private boolean isValidType(ExprType exprType)
+    {
+      switch (exprType) {
+        case DOUBLE:
+        case LONG:
+        case STRING:
+          return true;
+        default:
+          throw new IAE("Function[%s] does not accept %s types", name(), exprType);
+      }
+    }
+
+    /**
+     * Implements rules similar to: https://dev.mysql.com/doc/refman/8.0/en/comparison-operators.html#function_least
+     *
+     * @see org.apache.druid.sql.calcite.expression.builtin.ReductionOperatorConversionHelper#TYPE_INFERENCE
+     */
+    private static ExprType getComparisionType(Set<ExprType> exprTypes)
+    {
+      if (exprTypes.contains(ExprType.STRING)) {
+        return ExprType.STRING;
+      } else if (exprTypes.contains(ExprType.DOUBLE)) {
+        return ExprType.DOUBLE;
+      } else {
+        return ExprType.LONG;
+      }
+    }
+
+    private static class ExprAnalysis
+    {
+      final ExprType comparisonType;
+      final List<ExprEval<?>> exprEvals;
+
+      ExprAnalysis(ExprType comparisonType, List<ExprEval<?>> exprEvals)
+      {
+        this.comparisonType = comparisonType;
+        this.exprEvals = exprEvals;
+      }
     }
   }
 
@@ -1455,13 +1656,16 @@ interface Function
     }
 
     @Override
-    protected ExprEval eval(String x, int y)
+    protected ExprEval eval(@Nullable String x, int y)
     {
       if (y < 0) {
         throw new IAE(
             "Function[%s] needs a postive integer as second argument",
             name()
         );
+      }
+      if (x == null) {
+        return ExprEval.of(null);
       }
       int len = x.length();
       return ExprEval.of(y < len ? x.substring(len - y) : x);
@@ -1477,13 +1681,16 @@ interface Function
     }
 
     @Override
-    protected ExprEval eval(String x, int y)
+    protected ExprEval eval(@Nullable String x, int y)
     {
       if (y < 0) {
         throw new IAE(
             "Function[%s] needs a postive integer as second argument",
             name()
         );
+      }
+      if (x == null) {
+        return ExprEval.of(null);
       }
       return ExprEval.of(y < x.length() ? x.substring(0, y) : x);
     }
@@ -1773,8 +1980,7 @@ interface Function
 
       ExprType elementType = null;
       for (int i = 0; i < length; i++) {
-
-        ExprEval evaluated = args.get(i).eval(bindings);
+        ExprEval<?> evaluated = args.get(i).eval(bindings);
         if (elementType == null) {
           elementType = evaluated.type();
           switch (elementType) {
@@ -1795,6 +2001,9 @@ interface Function
         setArrayOutputElement(stringsOut, longsOut, doublesOut, elementType, i, evaluated);
       }
 
+      // There should be always at least one argument and thus elementType is never null.
+      // See validateArguments().
+      //noinspection ConstantConditions
       switch (elementType) {
         case STRING:
           return ExprEval.ofStringArray(stringsOut);
@@ -2381,6 +2590,7 @@ interface Function
 
       throw new RE("Unable to prepend to unknown type %s", arrayExpr.type());
     }
+
     private <T> Stream<T> prepend(T val, T[] array)
     {
       List<T> l = new ArrayList<>(Arrays.asList(array));

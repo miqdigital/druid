@@ -26,13 +26,12 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import org.apache.commons.io.FileUtils;
 import org.apache.druid.data.input.Committer;
 import org.apache.druid.data.input.Firehose;
 import org.apache.druid.data.input.FirehoseFactory;
 import org.apache.druid.discovery.DiscoveryDruidNode;
 import org.apache.druid.discovery.LookupNodeService;
-import org.apache.druid.discovery.NodeType;
+import org.apache.druid.discovery.NodeRole;
 import org.apache.druid.indexer.TaskStatus;
 import org.apache.druid.indexing.common.TaskLock;
 import org.apache.druid.indexing.common.TaskLockType;
@@ -71,7 +70,6 @@ import org.apache.druid.timeline.DataSegment;
 import org.joda.time.DateTime;
 import org.joda.time.Interval;
 
-import java.io.File;
 import java.io.IOException;
 import java.util.Map;
 import java.util.Timer;
@@ -194,6 +192,12 @@ public class RealtimeIndexTask extends AbstractTask
     }
 
     return plumber.getQueryRunner(query);
+  }
+
+  @Override
+  public boolean supportsQueries()
+  {
+    return true;
   }
 
   @Override
@@ -341,25 +345,25 @@ public class RealtimeIndexTask extends AbstractTask
         segmentPublisher,
         toolbox.getSegmentHandoffNotifierFactory(),
         toolbox.getQueryExecutorService(),
+        toolbox.getJoinableFactory(),
         toolbox.getIndexMergerV9(),
         toolbox.getIndexIO(),
         toolbox.getCache(),
         toolbox.getCacheConfig(),
         toolbox.getCachePopulatorStats(),
-        toolbox.getObjectMapper()
+        toolbox.getJsonMapper()
     );
 
     this.plumber = plumberSchool.findPlumber(dataSchema, tuningConfig, metrics);
 
     final Supplier<Committer> committerSupplier = Committers.nilSupplier();
-    final File firehoseTempDir = toolbox.getFirehoseTemporaryDir();
 
     LookupNodeService lookupNodeService = getContextValue(CTX_KEY_LOOKUP_TIER) == null ?
                                           toolbox.getLookupNodeService() :
                                           new LookupNodeService((String) getContextValue(CTX_KEY_LOOKUP_TIER));
     DiscoveryDruidNode discoveryDruidNode = new DiscoveryDruidNode(
         toolbox.getDruidNode(),
-        NodeType.PEON,
+        NodeRole.PEON,
         ImmutableMap.of(
             toolbox.getDataNodeService().getName(), toolbox.getDataNodeService(),
             lookupNodeService.getName(), lookupNodeService
@@ -374,10 +378,7 @@ public class RealtimeIndexTask extends AbstractTask
       plumber.startJob();
 
       // Set up metrics emission
-      toolbox.getMonitorScheduler().addMonitor(metricsMonitor);
-
-      // Firehose temporary directory is automatically removed when this RealtimeIndexTask completes.
-      FileUtils.forceMkdir(firehoseTempDir);
+      toolbox.addMonitor(metricsMonitor);
 
       // Delay firehose connection to avoid claiming input resources while the plumber is starting up.
       final FirehoseFactory firehoseFactory = spec.getIOConfig().getFirehoseFactory();
@@ -386,7 +387,10 @@ public class RealtimeIndexTask extends AbstractTask
       // Skip connecting firehose if we've been stopped before we got started.
       synchronized (this) {
         if (!gracefullyStopped) {
-          firehose = firehoseFactory.connect(spec.getDataSchema().getParser(), firehoseTempDir);
+          firehose = firehoseFactory.connect(
+              Preconditions.checkNotNull(spec.getDataSchema().getParser(), "inputRowParser"),
+              toolbox.getIndexingTmpDir()
+          );
         }
       }
 
@@ -469,7 +473,7 @@ public class RealtimeIndexTask extends AbstractTask
           if (firehose != null) {
             CloseQuietly.close(firehose);
           }
-          toolbox.getMonitorScheduler().removeMonitor(metricsMonitor);
+          toolbox.removeMonitor(metricsMonitor);
         }
       }
 

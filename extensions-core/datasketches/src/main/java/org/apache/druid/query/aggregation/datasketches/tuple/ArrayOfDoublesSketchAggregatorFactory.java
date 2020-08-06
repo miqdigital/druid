@@ -22,10 +22,10 @@ package org.apache.druid.query.aggregation.datasketches.tuple;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.base.Preconditions;
-import com.yahoo.sketches.Util;
-import com.yahoo.sketches.tuple.ArrayOfDoublesSetOperationBuilder;
-import com.yahoo.sketches.tuple.ArrayOfDoublesSketch;
-import com.yahoo.sketches.tuple.ArrayOfDoublesUnion;
+import org.apache.datasketches.Util;
+import org.apache.datasketches.tuple.ArrayOfDoublesSetOperationBuilder;
+import org.apache.datasketches.tuple.ArrayOfDoublesSketch;
+import org.apache.datasketches.tuple.ArrayOfDoublesUnion;
 import org.apache.druid.java.util.common.IAE;
 import org.apache.druid.query.aggregation.AggregateCombiner;
 import org.apache.druid.query.aggregation.Aggregator;
@@ -302,37 +302,6 @@ public class ArrayOfDoublesSketchAggregatorFactory extends AggregatorFactory
   }
 
   @Override
-  public boolean equals(final Object o)
-  {
-    if (this == o) {
-      return true;
-    }
-    if (!(o instanceof ArrayOfDoublesSketchAggregatorFactory)) {
-      return false;
-    }
-    final ArrayOfDoublesSketchAggregatorFactory that = (ArrayOfDoublesSketchAggregatorFactory) o;
-    if (!name.equals(that.name)) {
-      return false;
-    }
-    if (!fieldName.equals(that.fieldName)) {
-      return false;
-    }
-    if (nominalEntries != that.nominalEntries) {
-      return false;
-    }
-    if (!Objects.equals(metricColumns, that.metricColumns)) {
-      return false;
-    }
-    return numberOfValues == that.numberOfValues;
-  }
-
-  @Override
-  public int hashCode()
-  {
-    return Objects.hash(name, fieldName, nominalEntries, metricColumns, numberOfValues);
-  }
-
-  @Override
   public String toString()
   {
     return this.getClass().getSimpleName() + "{"
@@ -344,4 +313,26 @@ public class ArrayOfDoublesSketchAggregatorFactory extends AggregatorFactory
         + "}";
   }
 
+  @Override
+  public boolean equals(Object o)
+  {
+    if (this == o) {
+      return true;
+    }
+    if (o == null || getClass() != o.getClass()) {
+      return false;
+    }
+    ArrayOfDoublesSketchAggregatorFactory that = (ArrayOfDoublesSketchAggregatorFactory) o;
+    return nominalEntries == that.nominalEntries &&
+           numberOfValues == that.numberOfValues &&
+           name.equals(that.name) &&
+           fieldName.equals(that.fieldName) &&
+           Objects.equals(metricColumns, that.metricColumns);
+  }
+
+  @Override
+  public int hashCode()
+  {
+    return Objects.hash(name, fieldName, nominalEntries, numberOfValues, metricColumns);
+  }
 }

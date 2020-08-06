@@ -28,6 +28,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.inject.Inject;
+import com.google.inject.name.Named;
 import org.apache.calcite.DataContext;
 import org.apache.calcite.jdbc.JavaTypeFactoryImpl;
 import org.apache.calcite.linq4j.Enumerable;
@@ -45,13 +46,15 @@ import org.apache.calcite.schema.TableMacro;
 import org.apache.calcite.schema.impl.AbstractSchema;
 import org.apache.calcite.schema.impl.AbstractTable;
 import org.apache.calcite.sql.type.SqlTypeName;
+import org.apache.druid.segment.column.RowSignature;
 import org.apache.druid.segment.column.ValueType;
 import org.apache.druid.server.security.AuthenticationResult;
 import org.apache.druid.server.security.AuthorizationUtils;
 import org.apache.druid.server.security.AuthorizerMapper;
 import org.apache.druid.server.security.ResourceAction;
 import org.apache.druid.sql.calcite.planner.PlannerContext;
-import org.apache.druid.sql.calcite.table.RowSignature;
+import org.apache.druid.sql.calcite.table.DruidTable;
+import org.apache.druid.sql.calcite.table.RowSignatures;
 
 import javax.annotation.Nullable;
 import java.util.Collection;
@@ -61,8 +64,6 @@ import java.util.Set;
 
 public class InformationSchema extends AbstractSchema
 {
-  public static final String NAME = "INFORMATION_SCHEMA";
-
   private static final String CATALOG_NAME = "druid";
   private static final String SCHEMATA_TABLE = "SCHEMATA";
   private static final String TABLES_TABLE = "TABLES";
@@ -83,6 +84,8 @@ public class InformationSchema extends AbstractSchema
       .add("TABLE_SCHEMA", ValueType.STRING)
       .add("TABLE_NAME", ValueType.STRING)
       .add("TABLE_TYPE", ValueType.STRING)
+      .add("IS_JOINABLE", ValueType.STRING)
+      .add("IS_BROADCAST", ValueType.STRING)
       .build();
   private static final RowSignature COLUMNS_SIGNATURE = RowSignature
       .builder()
@@ -109,14 +112,19 @@ public class InformationSchema extends AbstractSchema
     return Collections.singletonList(AuthorizationUtils.DATASOURCE_READ_RA_GENERATOR.apply(datasourceName));
   };
 
+  private static final String INFO_TRUE = "YES";
+  private static final String INFO_FALSE = "NO";
+
   private final SchemaPlus rootSchema;
   private final Map<String, Table> tableMap;
   private final AuthorizerMapper authorizerMapper;
+  private final String druidSchemaName;
 
   @Inject
   public InformationSchema(
-      final SchemaPlus rootSchema,
-      final AuthorizerMapper authorizerMapper
+      @Named(DruidCalciteSchemaModule.INCOMPLETE_SCHEMA) final SchemaPlus rootSchema,
+      final AuthorizerMapper authorizerMapper,
+      @DruidSchemaName String druidSchemaName
   )
   {
     this.rootSchema = Preconditions.checkNotNull(rootSchema, "rootSchema");
@@ -126,6 +134,7 @@ public class InformationSchema extends AbstractSchema
         COLUMNS_TABLE, new ColumnsTable()
     );
     this.authorizerMapper = authorizerMapper;
+    this.druidSchemaName = druidSchemaName;
   }
 
   @Override
@@ -167,7 +176,7 @@ public class InformationSchema extends AbstractSchema
     @Override
     public RelDataType getRowType(final RelDataTypeFactory typeFactory)
     {
-      return SCHEMATA_SIGNATURE.getRelDataType(typeFactory);
+      return RowSignatures.toRelDataType(SCHEMATA_SIGNATURE, typeFactory);
     }
 
     @Override
@@ -214,18 +223,27 @@ public class InformationSchema extends AbstractSchema
                   return Iterables.filter(
                       Iterables.concat(
                           FluentIterable.from(authorizedTableNames).transform(
-                              new Function<String, Object[]>()
-                              {
-                                @Override
-                                public Object[] apply(final String tableName)
-                                {
-                                  return new Object[]{
-                                      CATALOG_NAME, // TABLE_CATALOG
-                                      schemaName, // TABLE_SCHEMA
-                                      tableName, // TABLE_NAME
-                                      subSchema.getTable(tableName).getJdbcTableType().toString() // TABLE_TYPE
-                                  };
+                              tableName -> {
+                                final Table table = subSchema.getTable(tableName);
+                                final boolean isJoinable;
+                                final boolean isBroadcast;
+                                if (table instanceof DruidTable) {
+                                  DruidTable druidTable = (DruidTable) table;
+                                  isJoinable = druidTable.isJoinable();
+                                  isBroadcast = druidTable.isBroadcast();
+                                } else {
+                                  isJoinable = false;
+                                  isBroadcast = false;
                                 }
+
+                                return new Object[]{
+                                    CATALOG_NAME, // TABLE_CATALOG
+                                    schemaName, // TABLE_SCHEMA
+                                    tableName, // TABLE_NAME
+                                    table.getJdbcTableType().toString(), // TABLE_TYPE
+                                    isJoinable ? INFO_TRUE : INFO_FALSE, // IS_JOINABLE
+                                    isBroadcast ? INFO_TRUE : INFO_FALSE // IS_BROADCAST
+                                };
                               }
                           ),
                           FluentIterable.from(authorizedFunctionNames).transform(
@@ -239,7 +257,9 @@ public class InformationSchema extends AbstractSchema
                                         CATALOG_NAME, // TABLE_CATALOG
                                         schemaName, // TABLE_SCHEMA
                                         functionName, // TABLE_NAME
-                                        "VIEW" // TABLE_TYPE
+                                        "VIEW", // TABLE_TYPE
+                                        INFO_FALSE, // IS_JOINABLE
+                                        INFO_FALSE // IS_BROADCAST
                                     };
                                   } else {
                                     return null;
@@ -260,7 +280,7 @@ public class InformationSchema extends AbstractSchema
     @Override
     public RelDataType getRowType(final RelDataTypeFactory typeFactory)
     {
-      return TABLES_SIGNATURE.getRelDataType(typeFactory);
+      return RowSignatures.toRelDataType(TABLES_SIGNATURE, typeFactory);
     }
 
     @Override
@@ -357,7 +377,7 @@ public class InformationSchema extends AbstractSchema
     @Override
     public RelDataType getRowType(final RelDataTypeFactory typeFactory)
     {
-      return COLUMNS_SIGNATURE.getRelDataType(typeFactory);
+      return RowSignatures.toRelDataType(COLUMNS_SIGNATURE, typeFactory);
     }
 
     @Override
@@ -403,7 +423,7 @@ public class InformationSchema extends AbstractSchema
                       field.getName(), // COLUMN_NAME
                       String.valueOf(field.getIndex()), // ORDINAL_POSITION
                       "", // COLUMN_DEFAULT
-                      type.isNullable() ? "YES" : "NO", // IS_NULLABLE
+                      type.isNullable() ? INFO_TRUE : INFO_FALSE, // IS_NULLABLE
                       type.getSqlTypeName().toString(), // DATA_TYPE
                       null, // CHARACTER_MAXIMUM_LENGTH
                       null, // CHARACTER_OCTET_LENGTH
@@ -451,7 +471,7 @@ public class InformationSchema extends AbstractSchema
       final AuthenticationResult authenticationResult
   )
   {
-    if (DruidSchema.NAME.equals(subSchema.getName())) {
+    if (druidSchemaName.equals(subSchema.getName())) {
       // The "druid" schema's tables represent Druid datasources which require authorization
       return ImmutableSet.copyOf(
           AuthorizationUtils.filterAuthorizedResources(
@@ -472,7 +492,7 @@ public class InformationSchema extends AbstractSchema
       final AuthenticationResult authenticationResult
   )
   {
-    if (DruidSchema.NAME.equals(subSchema.getName())) {
+    if (druidSchemaName.equals(subSchema.getName())) {
       // The "druid" schema's functions represent views on Druid datasources, authorize them as if they were
       // datasources for now
       return ImmutableSet.copyOf(
