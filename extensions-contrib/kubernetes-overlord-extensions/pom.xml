@@ -98,7 +98,7 @@
     <dependency>
       <groupId>io.fabric8</groupId>
       <artifactId>kubernetes-model-core</artifactId>
-      <version>5.12.2</version>
+      <version>6.7.2</version>
     </dependency>
     <dependency>
       <groupId>javax.validation</groupId>
