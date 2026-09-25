@@ -102,7 +102,7 @@
         <fabric8.version>7.9.0</fabric8.version>
         <fastutil.version>8.5.4</fastutil.version>
         <guava.version>33.7.1-jre</guava.version>
-        <guice.version>6.0.0</guice.version>
+        <guice.version>7.0.0</guice.version>
         <hamcrest.version>3.0</hamcrest.version>
         <iceberg.core.version>1.11.0</iceberg.core.version>
         <arrow.version>19.0.0</arrow.version>
